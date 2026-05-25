@@ -14,10 +14,12 @@ authors = [
 ]
 requires-python = ">=3.10"
 keywords = [
+  "agentic-coding",
   "coding-agents",
   "github",
   "llm",
   "local-llm",
+  "maintainer-tools",
   "maintainers",
   "repository-context",
 ]

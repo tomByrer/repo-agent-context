@@ -1,5 +1,10 @@
 # repo-agent-context
 
+[![CI](https://github.com/arnowaschk/repo-agent-context/actions/workflows/ci.yml/badge.svg)](https://github.com/arnowaschk/repo-agent-context/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://github.com/arnowaschk/repo-agent-context)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://github.com/arnowaschk/repo-agent-context)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 Local GitHub issue and PR context snapshots for coding agents and local LLMs.
 
 `repo-agent-context` builds a local, file-based context snapshot from a GitHub repository's issues and pull requests so that coding agents can answer questions about project state, open work, stale pull requests, likely fixes, and good first contributions without repeatedly browsing GitHub.
@@ -95,6 +100,22 @@ or:
 pip install repo-agent-context
 ```
 
+## Quick Start
+
+Run this from the target repository clone:
+
+```bash
+gh auth login
+git fetch upstream
+repo-agent-context build
+```
+
+If the repository has no `upstream` remote, use:
+
+```bash
+repo-agent-context build --upstream UPSTREAM_OWNER/oss_repo
+```
+
 ## Installation for Development
 
 Clone the project and install dependencies:
@@ -119,7 +140,7 @@ uv run tox
 
 ## Basic usage
 
-Inside a local clone with remotes like this:
+Inside the target repository clone, with remotes like this:
 
 ```text
 origin    git@github.com:YOUR_NAME/oss_repo.git
@@ -350,8 +371,8 @@ For issue triage:
 
 ```text
 Use agent_context/issues/*.md and agent_context/prs/*.md.
-Find issues related to dependency resolution, import parsing, or requirements.txt output.
-Group them by likely affected source file.
+Find issues related to CI failures, stale pull requests, or branch-ahead work.
+Group them by likely affected source file or workflow.
 ```
 
 ## CLI options
@@ -440,6 +461,20 @@ This prevents local agent context snapshots from being accidentally committed to
 ## Roadmap
 
 See [ROADMAP.md](ROADMAP.md).
+
+## Suggested Repository Topics
+
+Useful GitHub repository topics:
+
+```text
+agentic-coding
+coding-agents
+github
+llm
+local-llm
+maintainer-tools
+repository-context
+```
 
 ## Support
 

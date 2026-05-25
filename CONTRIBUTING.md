@@ -12,13 +12,14 @@ uv sync
 
 ## Checks
 
-Run the full local check set:
+Run the full local check set. This is the preferred pre-PR command because it
+matches the supported Python matrix where local interpreters are available:
 
 ```bash
 uv run tox
 ```
 
-Or run checks individually:
+For targeted debugging, run individual checks:
 
 ```bash
 uv run pytest -q
@@ -42,13 +43,9 @@ uv run mypy src
 Before publishing a release:
 
 ```bash
-uv run pytest -q
-uv run coverage run -m pytest -q
-uv run coverage report
-uv run ruff check .
-uv run mypy src
 uv run tox
 uv build
 ```
 
-Also inspect `README.md` and `SOCIAL_MEDIA.md` for stale examples, links, and version-specific wording.
+Also inspect `README.md`, `ROADMAP.md`, and `SOCIAL_MEDIA.md` for stale examples,
+links, and version-specific wording.
