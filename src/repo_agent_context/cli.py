@@ -13,10 +13,10 @@ from rich.progress import track
 from repo_agent_context.git import (
     GitDetectionError,
     branches_ahead_of_base,
-    detect_upstream_and_fork,
+    detect_repository_context,
 )
-from repo_agent_context.github import check_gh_available, check_repo_access, gh_json, run_gh
 from repo_agent_context.model import ContextConfig
+from repo_agent_context.providers import RepositoryProvider, get_provider
 from repo_agent_context.render import (
     render_branches_ahead,
     render_issue,
@@ -32,17 +32,6 @@ console = Console()
 DEFAULT_AGENT_FILE = Path("AGENT.md")
 DEFAULT_OUT_DIR = Path("agent_context")
 SUPPORT_URL = "https://buymeacoffee.com/arnwas"
-ISSUE_LIST_FIELDS = "number,title,state,author,labels,createdAt,updatedAt,url,body"
-ISSUE_VIEW_FIELDS = "number,title,state,author,labels,createdAt,updatedAt,url,body,comments"
-PR_LIST_FIELDS = (
-    "number,title,state,author,labels,createdAt,updatedAt,url,body,"
-    "isDraft,mergeable,reviewDecision,headRefName,baseRefName,statusCheckRollup"
-)
-PR_VIEW_FIELDS = (
-    "number,title,state,author,labels,createdAt,updatedAt,url,body,"
-    "comments,isDraft,mergeable,reviewDecision,headRefName,baseRefName,"
-    "files,commits,statusCheckRollup"
-)
 
 
 def print_support() -> None:
@@ -63,6 +52,19 @@ def load_metadata(path: Path) -> dict[str, Any]:
         raise typer.BadParameter(f"Metadata file is not valid JSON: {path}") from exc
 
     return metadata
+
+
+def normalize_provider(provider: str | None) -> str | None:
+    if provider is None:
+        return None
+
+    normalized = provider.strip().lower()
+    if normalized == "auto":
+        return None
+    if normalized not in {"github", "gitlab"}:
+        raise typer.BadParameter("Provider must be auto, github, or gitlab.")
+
+    return normalized
 
 
 def update_gitignore(config: ContextConfig) -> None:
@@ -121,15 +123,15 @@ def write_text(path: Path, text: str) -> None:
 def build_context_items(
     *,
     config: ContextConfig,
-    list_args: list[str],
+    list_items: Callable[[], list[dict[str, Any]]],
     item_kind: str,
     item_dir: Path,
     list_filename: str,
-    view_args_factory: Callable[[str], list[str]],
+    view_item: Callable[[str], dict[str, Any]],
     render_item: Callable[[dict[str, Any]], str],
     extra_writer: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = gh_json(list_args)
+    items = list_items()
     write_json(config.out_dir / list_filename, items)
 
     full_items: list[dict[str, Any]] = []
@@ -139,7 +141,7 @@ def build_context_items(
             raise typer.BadParameter(f"{item_kind.capitalize()} entry is missing a number: {item!r}")
 
         number = str(number_value)
-        full: dict[str, Any] = gh_json(view_args_factory(number))
+        full = view_item(number)
         full_items.append(full)
         write_json(item_dir / f"{number}.json", full)
         write_text(item_dir / f"{number}.md", render_item(full))
@@ -150,74 +152,34 @@ def build_context_items(
     return full_items
 
 
-def build_issues(config: ContextConfig) -> list[dict[str, Any]]:
+def build_issues(config: ContextConfig, provider: RepositoryProvider) -> list[dict[str, Any]]:
     state = "all" if config.include_closed else "open"
     return build_context_items(
         config=config,
-        list_args=[
-            "issue",
-            "list",
-            "--repo",
-            config.upstream,
-            "--state",
-            state,
-            "--limit",
-            str(config.issue_limit),
-            "--json",
-            ISSUE_LIST_FIELDS,
-        ],
+        list_items=lambda: provider.list_issues(config.upstream, state, config.issue_limit),
         item_kind="issues",
         item_dir=config.out_dir / "issues",
         list_filename="issues.json",
-        view_args_factory=lambda number: [
-            "issue",
-            "view",
-            number,
-            "--repo",
-            config.upstream,
-            "--comments",
-            "--json",
-            ISSUE_VIEW_FIELDS,
-        ],
+        view_item=lambda number: provider.view_issue(config.upstream, number),
         render_item=render_issue,
     )
 
 
-def build_prs(config: ContextConfig) -> list[dict[str, Any]]:
+def build_prs(config: ContextConfig, provider: RepositoryProvider) -> list[dict[str, Any]]:
     state = "all" if config.include_closed else "open"
     item_dir = config.out_dir / "prs"
 
     def write_diff(number: str, _: dict[str, Any]) -> None:
-        diff = run_gh(["pr", "diff", number, "--repo", config.upstream])
+        diff = provider.diff_pr(config.upstream, number)
         write_text(item_dir / f"{number}.diff", diff)
 
     return build_context_items(
         config=config,
-        list_args=[
-            "pr",
-            "list",
-            "--repo",
-            config.upstream,
-            "--state",
-            state,
-            "--limit",
-            str(config.pr_limit),
-            "--json",
-            PR_LIST_FIELDS,
-        ],
+        list_items=lambda: provider.list_prs(config.upstream, state, config.pr_limit),
         item_kind="pull requests",
         item_dir=item_dir,
         list_filename="prs.json",
-        view_args_factory=lambda number: [
-            "pr",
-            "view",
-            number,
-            "--repo",
-            config.upstream,
-            "--comments",
-            "--json",
-            PR_VIEW_FIELDS,
-        ],
+        view_item=lambda number: provider.view_pr(config.upstream, number),
         render_item=render_pr,
         extra_writer=write_diff,
     )
@@ -232,6 +194,7 @@ def build_branches(config: ContextConfig) -> dict[str, Any]:
 
 def build_metadata(config: ContextConfig) -> None:
     metadata = {
+        "provider": config.provider,
         "upstream": config.upstream,
         "fork": config.fork,
         "out_dir": str(config.out_dir),
@@ -262,7 +225,10 @@ def write_agent_file(config: ContextConfig) -> None:
 
 
 def run_build(config: ContextConfig) -> None:
+    provider = get_provider(config.provider)
+
     console.print("[bold]Detected repository configuration:[/bold]")
+    console.print(f"Provider: [bold]{config.provider}[/bold]")
     console.print(f"Upstream: [bold]{config.upstream}[/bold]")
     console.print(f"Fork: [bold]{config.fork or 'none'}[/bold]")
     console.print(f"Output directory: [bold]{config.out_dir}[/bold]")
@@ -270,22 +236,22 @@ def run_build(config: ContextConfig) -> None:
     console.print(f"Branch-ahead base: [bold]{config.base_branch or 'auto'}[/bold]")
     console.print()
 
-    console.print("[bold]Checking GitHub CLI...[/bold]")
-    check_gh_available()
+    console.print(f"[bold]Checking {config.provider} CLI...[/bold]")
+    provider.check_available()
 
     console.print(f"[bold]Checking upstream repository:[/bold] {config.upstream}")
-    check_repo_access(config.upstream)
+    provider.check_repo_access(config.upstream)
 
     if config.fork:
         console.print(f"[bold]Checking fork repository:[/bold] {config.fork}")
-        check_repo_access(config.fork)
+        provider.check_repo_access(config.fork)
 
     config.out_dir.mkdir(parents=True, exist_ok=True)
 
     build_metadata(config)
 
-    issues = build_issues(config)
-    prs = build_prs(config)
+    issues = build_issues(config, provider)
+    prs = build_prs(config, provider)
     branches = build_branches(config)
 
     write_text(config.out_dir / "index" / "issues_index.md", render_issues_index(issues))
@@ -313,14 +279,22 @@ def run_build(config: ContextConfig) -> None:
 def status(
     upstream: Annotated[str | None, typer.Option("--upstream", "-u")] = None,
     fork: Annotated[str | None, typer.Option("--fork", "-f")] = None,
+    provider: Annotated[
+        str | None,
+        typer.Option(
+            "--provider",
+            help="Repository provider: auto, github, or gitlab.",
+        ),
+    ] = None,
 ) -> None:
     try:
-        detected_upstream, detected_fork = detect_upstream_and_fork(upstream, fork)
+        detected = detect_repository_context(upstream, fork, normalize_provider(provider))
     except GitDetectionError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    console.print(f"Upstream: [bold]{detected_upstream}[/bold]")
-    console.print(f"Fork: [bold]{detected_fork or 'none'}[/bold]")
+    console.print(f"Provider: [bold]{detected.provider}[/bold]")
+    console.print(f"Upstream: [bold]{detected.upstream}[/bold]")
+    console.print(f"Fork: [bold]{detected.fork or 'none'}[/bold]")
     print_support()
 
 
@@ -331,7 +305,7 @@ def build(
         typer.Option(
             "--upstream",
             "-u",
-            help="Upstream GitHub repository, e.g. arnowaschk/repo-agent-context. "
+            help="Upstream repository, e.g. arnowaschk/repo-agent-context. "
             "If omitted, it is detected from the git remote named 'upstream', "
             "falling back to 'origin'.",
         ),
@@ -341,8 +315,15 @@ def build(
         typer.Option(
             "--fork",
             "-f",
-            help="Fork GitHub repository, e.g. myname/repo-agent-context. "
+            help="Fork repository, e.g. myname/repo-agent-context. "
             "If omitted, it is detected from the git remote named 'origin'.",
+        ),
+    ] = None,
+    provider: Annotated[
+        str | None,
+        typer.Option(
+            "--provider",
+            help="Repository provider: auto, github, or gitlab.",
         ),
     ] = None,
     out: Annotated[
@@ -390,13 +371,14 @@ def build(
     ] = None,
 ) -> None:
     try:
-        detected_upstream, detected_fork = detect_upstream_and_fork(upstream, fork)
+        detected = detect_repository_context(upstream, fork, normalize_provider(provider))
     except GitDetectionError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
     config = ContextConfig(
-        upstream=detected_upstream,
-        fork=detected_fork,
+        provider=detected.provider,
+        upstream=detected.upstream,
+        fork=detected.fork,
         out_dir=out,
         agent_file=agent_file,
         issue_limit=issue_limit,
@@ -426,7 +408,7 @@ def refresh(
             "--upstream",
             "-u",
             help=(
-                "Upstream GitHub repository. Used only if metadata.json is missing "
+                "Upstream repository. Used only if metadata.json is missing "
                 "or to override it."
             ),
         ),
@@ -436,7 +418,14 @@ def refresh(
         typer.Option(
             "--fork",
             "-f",
-            help="Fork GitHub repository. Used only if metadata.json is missing or to override it.",
+            help="Fork repository. Used only if metadata.json is missing or to override it.",
+        ),
+    ] = None,
+    provider: Annotated[
+        str | None,
+        typer.Option(
+            "--provider",
+            help="Repository provider: auto, github, or gitlab.",
         ),
     ] = None,
     issue_limit: Annotated[
@@ -468,8 +457,10 @@ def refresh(
 
     if metadata_path.exists():
         metadata = load_metadata(metadata_path)
+        metadata_provider = normalize_provider(metadata.get("provider")) or "github"
 
         config = ContextConfig(
+            provider=normalize_provider(provider) or metadata_provider,
             upstream=metadata["upstream"],
             fork=metadata.get("fork"),
             out_dir=Path(metadata.get("out_dir", str(out))),
@@ -489,13 +480,14 @@ def refresh(
         )
 
         try:
-            detected_upstream, detected_fork = detect_upstream_and_fork(upstream, fork)
+            detected = detect_repository_context(upstream, fork, normalize_provider(provider))
         except GitDetectionError as exc:
             raise typer.BadParameter(str(exc)) from exc
 
         config = ContextConfig(
-            upstream=detected_upstream,
-            fork=detected_fork,
+            provider=detected.provider,
+            upstream=detected.upstream,
+            fork=detected.fork,
             out_dir=out,
             agent_file=Path("AGENT.md"),
             issue_limit=300,

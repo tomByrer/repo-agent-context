@@ -40,7 +40,7 @@ The generated context is stored in:
 - Treat generated files as a local snapshot, not live GitHub state.
 - Do not assume current GitHub state beyond the local snapshot unless explicitly asked
   to refresh it.
-- When answering about an issue or PR, mention the issue or PR number.
+- When answering about an issue or PR / MR, mention the issue or PR / MR number.
 - Distinguish clearly between:
   - confirmed facts from issue or PR text,
   - inferred root causes,
@@ -50,7 +50,7 @@ The generated context is stored in:
   pull request are related.
 - Treat relations as detected textual references, not as proof that a pull request
   actually fixes an issue.
-- Use PR CI summaries to prioritize failing or pending checks before code review.
+- Use PR / MR CI summaries to prioritize failing or pending checks before code review.
 - Use `{context_dir}/index/branches_ahead.md` when asked about active branch work
   outside open pull requests.
 - If asked to recommend work items, prefer:

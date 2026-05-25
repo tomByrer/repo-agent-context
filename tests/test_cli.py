@@ -45,6 +45,17 @@ def test_load_metadata_wraps_invalid_json(tmp_path: Path) -> None:
         cli.load_metadata(metadata_path)
 
 
+def test_normalize_provider_accepts_auto_and_known_values() -> None:
+    assert cli.normalize_provider("auto") is None
+    assert cli.normalize_provider("github") == "github"
+    assert cli.normalize_provider("GitLab") == "gitlab"
+
+
+def test_normalize_provider_rejects_unknown_value() -> None:
+    with pytest.raises(typer.BadParameter, match="Provider must be auto, github, or gitlab."):
+        cli.normalize_provider("bitbucket")
+
+
 def test_write_json_and_text_create_parent_directories(tmp_path: Path) -> None:
     cli.write_json(tmp_path / "nested" / "data.json", {"snowman": "ok", "alpha": "first"})
     cli.write_text(tmp_path / "nested" / "text.md", "hello")
@@ -63,22 +74,15 @@ def test_build_context_items_writes_full_items_and_invokes_extra_writer(
     config_factory: Callable[..., ContextConfig],
 ) -> None:
     calls: list[str] = []
-
-    def fake_gh_json(args: list[str]) -> object:
-        if args[:2] == ["issue", "list"]:
-            return [{"number": 1, "title": "Issue 1"}]
-        return {"number": 1, "title": "Issue 1"}
-
-    monkeypatch.setattr(cli, "gh_json", fake_gh_json)
     monkeypatch.setattr(cli, "track", lambda items, description: items)
 
     result = cli.build_context_items(
         config=config_factory(out_dir=tmp_path / "agent_context", agent_file=tmp_path / "AGENT.md"),
-        list_args=["issue", "list"],
+        list_items=lambda: [{"number": 1, "title": "Issue 1"}],
         item_kind="issues",
         item_dir=tmp_path / "agent_context" / "issues",
         list_filename="issues.json",
-        view_args_factory=lambda number: ["issue", "view", number],
+        view_item=lambda number: {"number": 1, "title": "Issue 1"},
         render_item=lambda item: "rendered",
         extra_writer=lambda number, item: calls.append(number),
     )
@@ -94,17 +98,16 @@ def test_build_context_items_rejects_missing_number(
     monkeypatch: pytest.MonkeyPatch,
     config_factory: Callable[..., ContextConfig],
 ) -> None:
-    monkeypatch.setattr(cli, "gh_json", lambda args: [{}] if args[:2] == ["issue", "list"] else {})
     monkeypatch.setattr(cli, "track", lambda items, description: items)
 
     with pytest.raises(typer.BadParameter, match="missing a number"):
         cli.build_context_items(
             config=config_factory(out_dir=tmp_path / "agent_context", agent_file=tmp_path / "AGENT.md"),
-            list_args=["issue", "list"],
+            list_items=lambda: [{}],
             item_kind="issues",
             item_dir=tmp_path / "agent_context" / "issues",
             list_filename="issues.json",
-            view_args_factory=lambda number: ["issue", "view", number],
+            view_item=lambda number: {},
             render_item=lambda item: "rendered",
         )
 
@@ -115,19 +118,25 @@ def test_build_issues_fetches_list_and_full_items(
     config_factory: Callable[..., ContextConfig],
     issue_factory: Callable[..., dict[str, object]],
 ) -> None:
-    calls: list[list[str]] = []
-
-    def fake_gh_json(args: list[str]) -> object:
-        calls.append(args)
-        if args[:2] == ["issue", "list"]:
-            return [{"number": 1, "title": "Issue 1"}]
-        return issue_factory(1)
-
-    monkeypatch.setattr(cli, "gh_json", fake_gh_json)
     monkeypatch.setattr(cli, "track", lambda items, description: items)
+    calls: list[tuple[str, object]] = []
+
+    class Provider:
+        name = "github"
+
+        def list_issues(self, repo: str, state: str, limit: int) -> list[dict[str, object]]:
+            calls.append(("list", (repo, state, limit)))
+            return [{"number": 1, "title": "Issue 1"}]
+
+        def view_issue(self, repo: str, number: str) -> dict[str, object]:
+            calls.append(("view", (repo, number)))
+            return issue_factory(1)
+
+    monkeypatch.setattr(cli, "get_provider", lambda provider: Provider())
 
     result = cli.build_issues(
-        config_factory(out_dir=tmp_path / "agent_context", agent_file=tmp_path / "AGENT.md")
+        config_factory(out_dir=tmp_path / "agent_context", agent_file=tmp_path / "AGENT.md"),
+        Provider(),
     )
 
     assert result == [issue_factory(1)]
@@ -135,8 +144,7 @@ def test_build_issues_fetches_list_and_full_items(
         {"number": 1, "title": "Issue 1"}
     ]
     assert (tmp_path / "agent_context" / "issues" / "1.md").exists()
-    assert "--state" in calls[0]
-    assert "open" in calls[0]
+    assert calls == [("list", ("owner/repo", "open", 2)), ("view", ("owner/repo", "1"))]
 
 
 def test_build_issues_can_include_closed(
@@ -144,17 +152,25 @@ def test_build_issues_can_include_closed(
     monkeypatch: pytest.MonkeyPatch,
     config_factory: Callable[..., ContextConfig],
 ) -> None:
-    calls: list[list[str]] = []
+    calls: list[tuple[str, object]] = []
     cfg = config_factory(
         out_dir=tmp_path / "agent_context",
         agent_file=tmp_path / "AGENT.md",
         include_closed=True,
     )
 
-    monkeypatch.setattr(cli, "gh_json", lambda args: calls.append(args) or [])
+    class Provider:
+        name = "github"
 
-    assert cli.build_issues(cfg) == []
-    assert "all" in calls[0]
+        def list_issues(self, repo: str, state: str, limit: int) -> list[dict[str, object]]:
+            calls.append(("list", (repo, state, limit)))
+            return []
+
+        def view_issue(self, repo: str, number: str) -> dict[str, object]:
+            raise AssertionError("unexpected view call")
+
+    assert cli.build_issues(cfg, Provider()) == []
+    assert calls == [("list", ("owner/repo", "all", 2))]
 
 
 def test_build_prs_fetches_status_rollup_and_diff(
@@ -163,25 +179,35 @@ def test_build_prs_fetches_status_rollup_and_diff(
     config_factory: Callable[..., ContextConfig],
     pr_factory: Callable[..., dict[str, object]],
 ) -> None:
-    calls: list[list[str]] = []
-
-    def fake_gh_json(args: list[str]) -> object:
-        calls.append(args)
-        if args[:2] == ["pr", "list"]:
-            return [{"number": 2, "title": "PR 2", "statusCheckRollup": []}]
-        return pr_factory(2)
-
-    monkeypatch.setattr(cli, "gh_json", fake_gh_json)
-    monkeypatch.setattr(cli, "run_gh", lambda args: "diff text")
     monkeypatch.setattr(cli, "track", lambda items, description: items)
+    calls: list[tuple[str, object]] = []
+
+    class Provider:
+        name = "github"
+
+        def list_prs(self, repo: str, state: str, limit: int) -> list[dict[str, object]]:
+            calls.append(("list", (repo, state, limit)))
+            return [{"number": 2, "title": "PR 2", "statusCheckRollup": []}]
+
+        def view_pr(self, repo: str, number: str) -> dict[str, object]:
+            calls.append(("view", (repo, number)))
+            return pr_factory(2)
+
+        def diff_pr(self, repo: str, number: str) -> str:
+            calls.append(("diff", (repo, number)))
+            return "diff text"
 
     result = cli.build_prs(
-        config_factory(out_dir=tmp_path / "agent_context", agent_file=tmp_path / "AGENT.md")
+        config_factory(out_dir=tmp_path / "agent_context", agent_file=tmp_path / "AGENT.md"),
+        Provider(),
     )
 
     assert result == [pr_factory(2)]
-    assert "statusCheckRollup" in calls[0][-1]
-    assert "statusCheckRollup" in calls[1][-1]
+    assert calls == [
+        ("list", ("owner/repo", "open", 2)),
+        ("view", ("owner/repo", "2")),
+        ("diff", ("owner/repo", "2")),
+    ]
     assert (tmp_path / "agent_context" / "prs" / "2.diff").read_text() == "diff text"
 
 
@@ -225,6 +251,7 @@ def test_build_metadata_writes_config(
     cli.build_metadata(cfg)
 
     metadata = json.loads((tmp_path / "agent_context" / "metadata.json").read_text())
+    assert metadata["provider"] == "github"
     assert metadata["upstream"] == "owner/repo"
     assert metadata["fork"] == "fork/repo"
     assert metadata["issue_limit"] == 2
@@ -256,11 +283,36 @@ def test_run_build_orchestrates_all_steps_with_fork(
     calls: list[str] = []
     cfg = config_factory(out_dir=tmp_path / "agent_context", agent_file=tmp_path / "AGENT.md")
 
-    monkeypatch.setattr(cli, "check_gh_available", lambda: calls.append("gh"))
-    monkeypatch.setattr(cli, "check_repo_access", lambda repo: calls.append(f"repo:{repo}"))
+    class Provider:
+        name = "github"
+
+        def check_available(self) -> None:
+            calls.append("provider")
+
+        def check_repo_access(self, repo: str) -> None:
+            calls.append(f"repo:{repo}")
+
+        def list_issues(self, repo: str, state: str, limit: int) -> list[dict[str, object]]:
+            calls.append("issues")
+            return [issue_factory(1)]
+
+        def view_issue(self, repo: str, number: str) -> dict[str, object]:
+            return issue_factory(1)
+
+        def list_prs(self, repo: str, state: str, limit: int) -> list[dict[str, object]]:
+            calls.append("prs")
+            return [pr_factory(2)]
+
+        def view_pr(self, repo: str, number: str) -> dict[str, object]:
+            return pr_factory(2)
+
+        def diff_pr(self, repo: str, number: str) -> str:
+            return "diff text"
+
+    monkeypatch.setattr(cli, "get_provider", lambda provider: Provider())
     monkeypatch.setattr(cli, "build_metadata", lambda config: calls.append("metadata"))
-    monkeypatch.setattr(cli, "build_issues", lambda config: [issue_factory(1)])
-    monkeypatch.setattr(cli, "build_prs", lambda config: [pr_factory(2)])
+    monkeypatch.setattr(cli, "build_issues", lambda config, provider: [issue_factory(1)])
+    monkeypatch.setattr(cli, "build_prs", lambda config, provider: [pr_factory(2)])
     monkeypatch.setattr(
         cli,
         "build_branches",
@@ -272,7 +324,7 @@ def test_run_build_orchestrates_all_steps_with_fork(
 
     cli.run_build(cfg)
 
-    assert calls[:4] == ["gh", "repo:owner/repo", "repo:fork/repo", "metadata"]
+    assert calls[:4] == ["provider", "repo:owner/repo", "repo:fork/repo", "metadata"]
     assert "issues_index.md" in calls
     assert "prs_index.md" in calls
     assert "relations.md" in calls
@@ -291,11 +343,34 @@ def test_run_build_skips_fork_check_when_no_fork(
         fork=None,
     )
 
-    monkeypatch.setattr(cli, "check_gh_available", lambda: None)
-    monkeypatch.setattr(cli, "check_repo_access", lambda repo: checked.append(repo))
+    class Provider:
+        name = "github"
+
+        def check_available(self) -> None:
+            return None
+
+        def check_repo_access(self, repo: str) -> None:
+            checked.append(repo)
+
+        def list_issues(self, repo: str, state: str, limit: int) -> list[dict[str, object]]:
+            return []
+
+        def view_issue(self, repo: str, number: str) -> dict[str, object]:
+            raise AssertionError("unexpected issue view")
+
+        def list_prs(self, repo: str, state: str, limit: int) -> list[dict[str, object]]:
+            return []
+
+        def view_pr(self, repo: str, number: str) -> dict[str, object]:
+            raise AssertionError("unexpected pr view")
+
+        def diff_pr(self, repo: str, number: str) -> str:
+            raise AssertionError("unexpected diff")
+
+    monkeypatch.setattr(cli, "get_provider", lambda provider: Provider())
     monkeypatch.setattr(cli, "build_metadata", lambda config: None)
-    monkeypatch.setattr(cli, "build_issues", lambda config: [])
-    monkeypatch.setattr(cli, "build_prs", lambda config: [])
+    monkeypatch.setattr(cli, "build_issues", lambda config, provider: [])
+    monkeypatch.setattr(cli, "build_prs", lambda config, provider: [])
     monkeypatch.setattr(cli, "build_branches", lambda config: {"branches": []})
     monkeypatch.setattr(cli, "write_text", lambda path, text: None)
     monkeypatch.setattr(cli, "write_agent_file", lambda config: None)
@@ -310,13 +385,18 @@ def test_status_prints_detected_repos(monkeypatch: pytest.MonkeyPatch) -> None:
     lines: list[str] = []
     monkeypatch.setattr(
         cli,
-        "detect_upstream_and_fork",
-        lambda upstream, fork: ("owner/repo", None),
+        "detect_repository_context",
+        lambda upstream, fork, provider=None: type(
+            "Detected",
+            (),
+            {"provider": "github", "upstream": "owner/repo", "fork": None},
+        )(),
     )
     monkeypatch.setattr(cli.console, "print", lambda text="": lines.append(str(text)))
 
-    cli.status(None, None)
+    cli.status(None, None, None)
 
+    assert any("github" in line for line in lines)
     assert any("owner/repo" in line for line in lines)
     assert any("none" in line for line in lines)
 
@@ -324,12 +404,12 @@ def test_status_prints_detected_repos(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_status_wraps_detection_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         cli,
-        "detect_upstream_and_fork",
-        lambda upstream, fork: (_ for _ in ()).throw(GitDetectionError("bad remote")),
+        "detect_repository_context",
+        lambda upstream, fork, provider=None: (_ for _ in ()).throw(GitDetectionError("bad remote")),
     )
 
     with pytest.raises(typer.BadParameter):
-        cli.status(None, None)
+        cli.status(None, None, None)
 
 
 def test_build_command_creates_config_and_runs_build(
@@ -339,14 +419,19 @@ def test_build_command_creates_config_and_runs_build(
     seen: list[ContextConfig] = []
     monkeypatch.setattr(
         cli,
-        "detect_upstream_and_fork",
-        lambda upstream, fork: ("owner/repo", "fork/repo"),
+        "detect_repository_context",
+        lambda upstream, fork, provider=None: type(
+            "Detected",
+            (),
+            {"provider": "gitlab", "upstream": "owner/repo", "fork": "fork/repo"},
+        )(),
     )
     monkeypatch.setattr(cli, "run_build", lambda cfg: seen.append(cfg))
 
     cli.build(
         upstream=None,
         fork=None,
+        provider="gitlab",
         out=tmp_path / "ctx",
         agent_file=tmp_path / "AGENT.md",
         issue_limit=4,
@@ -361,13 +446,14 @@ def test_build_command_creates_config_and_runs_build(
     assert seen[0].issue_limit == 4
     assert seen[0].base_branch == "main"
     assert seen[0].include_closed is True
+    assert seen[0].provider == "gitlab"
 
 
 def test_build_command_wraps_detection_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         cli,
-        "detect_upstream_and_fork",
-        lambda upstream, fork: (_ for _ in ()).throw(GitDetectionError("bad remote")),
+        "detect_repository_context",
+        lambda upstream, fork, provider=None: (_ for _ in ()).throw(GitDetectionError("bad remote")),
     )
 
     with pytest.raises(typer.BadParameter):
@@ -400,6 +486,7 @@ def test_refresh_uses_existing_metadata(
 
     cli.refresh(out=out, overwrite_agent=True, update_gitignore_file=False)
 
+    assert seen[0].provider == "github"
     assert seen[0].upstream == "owner/repo"
     assert seen[0].agent_file == tmp_path / "CUSTOM.md"
     assert seen[0].issue_limit == 7
@@ -439,8 +526,12 @@ def test_refresh_falls_back_to_detection_without_metadata(
     seen: list[ContextConfig] = []
     monkeypatch.setattr(
         cli,
-        "detect_upstream_and_fork",
-        lambda upstream, fork: ("owner/repo", "fork/repo"),
+        "detect_repository_context",
+        lambda upstream, fork, provider=None: type(
+            "Detected",
+            (),
+            {"provider": "github", "upstream": "owner/repo", "fork": "fork/repo"},
+        )(),
     )
     monkeypatch.setattr(cli, "run_build", lambda cfg: seen.append(cfg))
 
@@ -451,6 +542,7 @@ def test_refresh_falls_back_to_detection_without_metadata(
     assert seen[0].out_dir == tmp_path / "missing"
     assert seen[0].agent_file == Path("AGENT.md")
     assert seen[0].base_branch is None
+    assert seen[0].provider == "github"
 
 
 def test_refresh_wraps_detection_errors_without_metadata(
@@ -459,8 +551,8 @@ def test_refresh_wraps_detection_errors_without_metadata(
 ) -> None:
     monkeypatch.setattr(
         cli,
-        "detect_upstream_and_fork",
-        lambda upstream, fork: (_ for _ in ()).throw(GitDetectionError("bad remote")),
+        "detect_repository_context",
+        lambda upstream, fork, provider=None: (_ for _ in ()).throw(GitDetectionError("bad remote")),
     )
 
     with pytest.raises(typer.BadParameter):

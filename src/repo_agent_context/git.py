@@ -14,6 +14,14 @@ class GitDetectionError(RuntimeError):
 class GitRemotes:
     origin: str | None
     upstream: str | None
+    provider: str | None = None
+
+
+@dataclass(frozen=True)
+class RepositoryContext:
+    provider: str
+    upstream: str
+    fork: str | None
 
 
 def run_git(args: list[str]) -> str:
@@ -65,40 +73,55 @@ def get_remote_url(remote_name: str) -> str | None:
     return url or None
 
 
-def github_repo_from_url(url: str) -> str | None:
+def parse_remote_url(url: str) -> tuple[str, str] | None:
     """
-    Convert common GitHub remote URLs to 'owner/repo'.
+    Convert common GitHub or GitLab remote URLs to `(provider, owner/repo)`.
 
     Supported examples:
     - git@github.com:owner/repo.git
+    - git@gitlab.com:owner/repo.git
     - https://github.com/owner/repo.git
+    - https://gitlab.com/owner/repo.git
     - https://github.com/owner/repo
+    - https://gitlab.com/owner/repo
     - ssh://git@github.com/owner/repo.git
+    - ssh://git@gitlab.com/owner/repo.git
     """
     patterns = [
-        r"^git@github\.com:(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?$",
-        r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$",
-        r"^ssh://git@github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$",
+        ("github", r"^git@github\.com:(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?$"),
+        ("gitlab", r"^git@gitlab\.com:(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?$"),
+        ("github", r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$"),
+        ("gitlab", r"^https://gitlab\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$"),
+        ("github", r"^ssh://git@github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$"),
+        ("gitlab", r"^ssh://git@gitlab\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$"),
     ]
 
-    for pattern in patterns:
+    for provider, pattern in patterns:
         match = re.match(pattern, url)
         if match:
             owner = match.group("owner")
             repo = match.group("repo")
-            return f"{owner}/{repo}"
+            return provider, f"{owner}/{repo}"
 
     return None
+
+
+def github_repo_from_url(url: str) -> str | None:
+    parsed = parse_remote_url(url)
+    return parsed[1] if parsed else None
 
 
 def detect_github_remotes() -> GitRemotes:
     origin_url = get_remote_url("origin")
     upstream_url = get_remote_url("upstream")
 
-    origin = github_repo_from_url(origin_url) if origin_url else None
-    upstream = github_repo_from_url(upstream_url) if upstream_url else None
+    origin_parsed = parse_remote_url(origin_url) if origin_url else None
+    upstream_parsed = parse_remote_url(upstream_url) if upstream_url else None
+    origin = origin_parsed[1] if origin_parsed else None
+    upstream = upstream_parsed[1] if upstream_parsed else None
+    provider = upstream_parsed[0] if upstream_parsed else origin_parsed[0] if origin_parsed else None
 
-    return GitRemotes(origin=origin, upstream=upstream)
+    return GitRemotes(origin=origin, upstream=upstream, provider=provider)
 
 
 def remote_name_for_repo(repo: str) -> str | None:
@@ -302,10 +325,21 @@ def detect_upstream_and_fork(
     if upstream is None:
         raise GitDetectionError(
             "Could not determine upstream repository.\n"
-            "Pass --upstream owner/repo explicitly or run this command inside a GitHub clone."
+            "Pass --upstream owner/repo explicitly or run this command inside a clone with a recognized remote."
         )
 
     if fork == upstream:
         fork = None
 
     return upstream, fork
+
+
+def detect_repository_context(
+    explicit_upstream: str | None,
+    explicit_fork: str | None,
+    explicit_provider: str | None = None,
+) -> RepositoryContext:
+    remotes = detect_github_remotes()
+    provider = explicit_provider or remotes.provider or "github"
+    upstream, fork = detect_upstream_and_fork(explicit_upstream, explicit_fork)
+    return RepositoryContext(provider=provider, upstream=upstream, fork=fork)
