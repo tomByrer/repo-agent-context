@@ -652,7 +652,13 @@ def test_gitlab_provider_view_pr_ignores_jobs_lookup_404(monkeypatch: pytest.Mon
         if endpoint == "projects/owner%2Frepo/merge_requests/5/pipelines?per_page=100":
             return [{"id": 99, "status": "failed", "web_url": "https://gitlab.com/pipeline/99"}]
         if endpoint == "projects/owner%2Frepo/pipelines/99/jobs?per_page=100":
-            raise gitlab.GitLabCliError("GitLab CLI command failed:\nCommand: glab api ...\nExit code: 1\nStderr:\nglab: 404 Not found (HTTP 404)")
+            raise gitlab.GitLabCliError(
+                "GitLab CLI command failed:\n"
+                "Command: glab api ...\n"
+                "Exit code: 1\n"
+                "Stderr:\n"
+                "glab: 404 Not found (HTTP 404)"
+            )
         raise AssertionError(f"unexpected endpoint: {endpoint}")
 
     monkeypatch.setattr(providers, "_gitlab_api_json", fake_gitlab_api_json)
