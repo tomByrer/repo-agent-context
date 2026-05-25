@@ -360,6 +360,13 @@ Run tests:
 uv run pytest -q
 ```
 
+Run tests with required 100% statement coverage:
+
+```bash
+uv run coverage run -m pytest -q
+uv run coverage report
+```
+
 Run linting:
 
 ```bash

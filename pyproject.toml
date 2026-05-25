@@ -19,7 +19,8 @@ repo-agent-context = "repo_agent_context.cli:app"
 dev = [
   "pytest>=8.0.0",
   "ruff>=0.6.0",
-  "mypy>=1.10.0"
+  "mypy>=1.10.0",
+  "coverage>=7.14.0",
 ]
 
 [tool.uv]
@@ -35,3 +36,10 @@ select = ["E", "F", "I", "B", "UP"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+[tool.coverage.run]
+source = ["src/repo_agent_context"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
