@@ -7,10 +7,8 @@ Possible future extensions:
 3. Date filters.
 4. Stale PR reporting.
 5. Good-first-issue ranking.
-6. Optional SQLite index.
-7. Optional embedding index.
-8. GitLab provider.
-9. Gitea provider.
+6. GitLab provider.
+7. Gitea provider.
 
 The current project intentionally starts with local Markdown and JSON files. New features should preserve that basic property unless there is a strong reason not to.
 

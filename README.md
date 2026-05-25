@@ -4,6 +4,8 @@ Local GitHub issue and PR context snapshots for coding agents and local LLMs.
 
 `repo-agent-context` builds a local, file-based context snapshot from a GitHub repository's issues and pull requests so that coding agents can answer questions about project state, open work, stale pull requests, likely fixes, and good first contributions without repeatedly browsing GitHub.
 
+Because the snapshot is local, it is useful before offline coding sessions, for example on planes or in the inevitable Funkloch on Deutsche Bahn tracks.
+
 The generated context is intended for local use inside a cloned repository. It includes issue bodies, issue comments, pull request metadata, pull request CI status, pull request comments, changed files, diffs, branches ahead of the upstream default branch, index files, metadata, and a generated `AGENT.md` with instructions for coding agents.
 
 It is intentionally plain Markdown and JSON. There is no hosted service, vector database, background daemon, or agent framework dependency.
@@ -16,7 +18,7 @@ The JSON files are written compactly to keep token usage low for downstream agen
 2. Fetch issues, pull requests, CI status, comments, diffs, and local branch data.
 3. Write compact Markdown and JSON files into `agent_context/` together with a generated `AGENT.md`.
 
-## Use case
+## Use Case
 
 Typical questions after generating the context:
 
@@ -78,13 +80,13 @@ gh repo view OWNER/REPO
 Install as a CLI tool:
 
 ```bash
-uv tool install repo-agent-context
+pipx install repo-agent-context
 ```
 
 or:
 
 ```bash
-pipx install repo-agent-context
+uv tool install repo-agent-context
 ```
 
 or:
@@ -324,6 +326,8 @@ In a target repository:
 git fetch upstream
 repo-agent-context build
 ```
+
+Run this while connected if you want to use the generated context later while offline.
 
 Then ask a coding agent questions such as:
 

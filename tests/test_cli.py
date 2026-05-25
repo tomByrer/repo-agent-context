@@ -31,11 +31,12 @@ def test_load_metadata_wraps_invalid_json(tmp_path: Path) -> None:
 
 
 def test_write_json_and_text_create_parent_directories(tmp_path: Path) -> None:
-    cli.write_json(tmp_path / "nested" / "data.json", {"snowman": "ok"})
+    cli.write_json(tmp_path / "nested" / "data.json", {"snowman": "ok", "alpha": "first"})
     cli.write_text(tmp_path / "nested" / "text.md", "hello")
 
-    assert (tmp_path / "nested" / "data.json").read_text(encoding="utf-8") == '{"snowman":"ok"}'
+    assert (tmp_path / "nested" / "data.json").read_text(encoding="utf-8") == '{"alpha":"first","snowman":"ok"}'
     assert json.loads((tmp_path / "nested" / "data.json").read_text(encoding="utf-8")) == {
+        "alpha": "first",
         "snowman": "ok"
     }
     assert (tmp_path / "nested" / "text.md").read_text(encoding="utf-8") == "hello"

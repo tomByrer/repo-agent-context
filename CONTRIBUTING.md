@@ -36,3 +36,19 @@ uv run mypy src
 - Add or update tests for behavior changes.
 - Preserve 100% statement coverage, but prefer meaningful assertions over coverage-only tests.
 - Avoid broad refactors in the same pull request as behavior changes.
+
+## Release Checklist
+
+Before publishing a release:
+
+```bash
+uv run pytest -q
+uv run coverage run -m pytest -q
+uv run coverage report
+uv run ruff check .
+uv run mypy src
+uv run tox
+uv build
+```
+
+Also inspect `README.md` and `SOCIAL_MEDIA.md` for stale examples, links, and version-specific wording.

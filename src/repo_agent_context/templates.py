@@ -37,6 +37,7 @@ The generated context is stored in:
 ## Rules for answering questions
 
 - Use the files in `{context_dir}` as the primary source of truth.
+- Treat generated files as a local snapshot, not live GitHub state.
 - Do not assume current GitHub state beyond the local snapshot unless explicitly asked
   to refresh it.
 - When answering about an issue or PR, mention the issue or PR number.
