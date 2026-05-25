@@ -226,6 +226,7 @@ def test_update_gitignore_creates_file(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.chdir(tmp_path)
 
     config = ContextConfig(
+        provider="github",
         upstream="owner/repo",
         fork="user/repo",
         out_dir=Path("agent_context"),

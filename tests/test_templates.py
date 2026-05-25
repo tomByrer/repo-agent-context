@@ -13,7 +13,7 @@ def test_render_agent_md_lists_context_files_and_rules() -> None:
     assert "Upstream repository: `owner/repo`" in rendered
     assert "Fork repository: `fork/repo`" in rendered
     assert "`agent_context/index/branches_ahead.md`" in rendered
-    assert "Use PR CI summaries" in rendered
+    assert "Use PR / MR CI summaries" in rendered
     assert "Treat generated files as a local snapshot" in rendered
 
 

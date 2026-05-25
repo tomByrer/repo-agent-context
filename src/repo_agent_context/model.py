@@ -6,6 +6,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class ContextConfig:
+    provider: str
     upstream: str
     fork: str | None
     out_dir: Path

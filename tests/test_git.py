@@ -68,6 +68,10 @@ def test_get_remote_url_strips_stdout_and_handles_empty_or_failure(
     assert git.get_remote_url("origin") is None
 
 
+def test_parse_remote_url_returns_none_for_unsupported_url() -> None:
+    assert git.parse_remote_url("https://example.com/owner/repo.git") is None
+
+
 def test_detect_github_remotes_handles_github_and_gitlab_urls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -78,6 +82,23 @@ def test_detect_github_remotes_handles_github_and_gitlab_urls(
 
     assert remotes.origin == "owner/repo"
     assert remotes.upstream == "x/y"
+    assert remotes.provider == "gitlab"
+
+
+def test_detect_repository_context_uses_detected_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        git,
+        "detect_github_remotes",
+        lambda: git.GitRemotes(origin="fork/repo", upstream="owner/repo", provider="gitlab"),
+    )
+
+    context = git.detect_repository_context(None, None, None)
+
+    assert context.provider == "gitlab"
+    assert context.upstream == "owner/repo"
+    assert context.fork == "fork/repo"
 
 
 def test_remote_name_for_repo_prefers_upstream_then_origin(

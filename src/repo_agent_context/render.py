@@ -17,11 +17,19 @@ FENCED_CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
 CI_STATE_PRIORITY = {
     "FAILURE": 0,
     "ERROR": 0,
+    "FAILED": 0,
     "ACTION_REQUIRED": 1,
+    "BLOCKED": 1,
+    "MANUAL": 1,
     "PENDING": 2,
+    "CREATED": 2,
     "QUEUED": 2,
+    "RUNNING": 2,
     "REQUESTED": 2,
     "STARTED": 2,
+    "PREPARING": 2,
+    "WAITING_FOR_RESOURCE": 2,
+    "SCHEDULED": 2,
     "CANCELLED": 3,
     "TIMED_OUT": 3,
     "SUCCESS": 4,
@@ -175,12 +183,12 @@ def render_relations(
 
 def author_login(item: dict[str, Any]) -> str:
     author = item.get("author") or {}
-    return author.get("login") or "unknown"
+    return author.get("login") or author.get("username") or author.get("name") or "unknown"
 
 
 def label_names(item: dict[str, Any]) -> str:
     labels = item.get("labels") or []
-    names = [label.get("name", "") for label in labels]
+    names = [label.get("name", "") if isinstance(label, dict) else str(label) for label in labels]
     return ", ".join(name for name in names if name)
 
 

@@ -5,13 +5,13 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://github.com/arnowaschk/repo-agent-context)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Local GitHub issue and PR context snapshots for coding agents and local LLMs.
+Local GitHub and GitLab issue and PR / merge request context snapshots for coding agents and local LLMs.
 
-`repo-agent-context` builds a local, file-based context snapshot from a GitHub repository's issues and pull requests so that coding agents can answer questions about project state, open work, stale pull requests, likely fixes, and good first contributions without repeatedly browsing GitHub.
+`repo-agent-context` builds a local, file-based context snapshot from a GitHub or GitLab repository's issues and pull requests / merge requests so that coding agents can answer questions about project state, open work, stale merge requests, likely fixes, and good first contributions without repeatedly browsing the hosting service.
 
 Because the snapshot is local, it is useful before offline coding sessions, for example on planes or in the inevitable Funkloch on Deutsche Bahn tracks.
 
-The generated context is intended for local use inside a cloned repository. It includes issue bodies, issue comments, pull request metadata, pull request CI status, pull request comments, changed files, diffs, branches ahead of the upstream default branch, index files, metadata, and a generated `AGENT.md` with instructions for coding agents.
+The generated context is intended for local use inside a cloned repository. It includes issue bodies, issue comments, pull request / merge request metadata, pull request / merge request CI status, comments, changed files, diffs, branches ahead of the upstream default branch, index files, metadata, and a generated `AGENT.md` with instructions for coding agents.
 
 It is intentionally plain Markdown and JSON. There is no hosted service, vector database, background daemon, or agent framework dependency.
 
@@ -20,8 +20,9 @@ The JSON files are written compactly to keep token usage low for downstream agen
 ## How It Works
 
 1. Detect the upstream and fork repositories, plus the branch base for branch-ahead context.
-2. Fetch issues, pull requests, CI status, comments, diffs, and local branch data.
-3. Write compact Markdown and JSON files into `agent_context/` together with a generated `AGENT.md`.
+2. Detect the repository provider unless you override it.
+3. Fetch issues, pull requests / merge requests, CI status, comments, diffs, and local branch data.
+4. Write compact Markdown and JSON files into `agent_context/` together with a generated `AGENT.md`.
 
 ## Use Case
 
@@ -39,7 +40,7 @@ The tool is especially useful when maintaining or contributing to existing open-
 
 ## What This Is
 
-- A CLI that exports GitHub issue and pull request context into local files.
+- A CLI that exports GitHub and GitLab issue and pull request / merge request context into local files.
 - A way to give coding agents and local LLMs compact project state without repeated browsing.
 - A source of Markdown and JSON that humans can inspect and edit workflows around.
 
@@ -48,7 +49,7 @@ The tool is especially useful when maintaining or contributing to existing open-
 - It is not an agent.
 - It is not an MCP server.
 - It is not an embedding or vector database.
-- It does not replace GitHub as the source of truth.
+- It does not replace GitHub or GitLab as the source of truth.
 
 ## Why Local Files
 
@@ -64,20 +65,26 @@ Local files are easy for terminal agents and local LLM workflows to inspect. The
 
 - Python 3.10 or newer
 - Git
-- GitHub CLI: `gh`
-- An authenticated GitHub CLI session
+- GitHub CLI: `gh` for GitHub repositories
+- GitLab CLI: `glab` for GitLab repositories
+- An authenticated CLI session for the provider you use
 
-Install GitHub CLI from https://cli.github.com/ or with your platform package manager
-(Homebrew on macOS, winget on Windows, apt/dnf/pacman on Linux), then authenticate with:
+Install GitHub CLI from https://cli.github.com/ or GitLab CLI from
+https://docs.gitlab.com/cli/installation/ (or your platform package manager),
+then authenticate with:
 
 ```bash
 gh auth login
+# or
+glab auth login
 ```
 
 Check access:
 
 ```bash
 gh repo view OWNER/REPO
+# or
+glab repo view OWNER/REPO
 ```
 
 ## Installation
@@ -116,6 +123,12 @@ If the repository has no `upstream` remote, use:
 repo-agent-context build --upstream UPSTREAM_OWNER/oss_repo
 ```
 
+If you want to force a provider, use:
+
+```bash
+repo-agent-context build --provider gitlab
+```
+
 ## Installation for Development
 
 Clone the project and install dependencies:
@@ -145,6 +158,13 @@ Inside the target repository clone, with remotes like this:
 ```text
 origin    git@github.com:YOUR_NAME/oss_repo.git
 upstream  https://github.com/UPSTREAM_OWNER/oss_repo.git
+```
+
+For GitLab, the equivalent remotes can look like:
+
+```text
+origin    git@gitlab.com:YOUR_NAME/oss_repo.git
+upstream  https://gitlab.com/UPSTREAM_OWNER/oss_repo.git
 ```
 
 run:
@@ -182,6 +202,7 @@ You can also pass the repositories explicitly:
 
 ```bash
 repo-agent-context build \
+  --provider gitlab \
   --upstream UPSTREAM_OWNER/oss_repo \
   --fork YOUR_NAME/oss_repo \
   --out agent_context \
@@ -193,6 +214,8 @@ If there is no fork:
 ```bash
 repo-agent-context build --upstream UPSTREAM_OWNER/oss_repo
 ```
+
+If you need to force GitHub explicitly, use `--provider github`.
 
 ## Repository detection
 
@@ -285,7 +308,10 @@ Contains rendered pull request text:
 Contains the pull request diff as returned by:
 
 ```bash
+# GitHub
 gh pr diff PR_NUMBER --repo OWNER/REPO
+# GitLab
+glab mr diff MR_NUMBER --repo OWNER/REPO
 ```
 
 ### `agent_context/index/issues_index.md`
@@ -388,8 +414,9 @@ repo-agent-context build [OPTIONS]
 Common options:
 
 ```text
---upstream, -u          Upstream GitHub repository, e.g. UPSTREAM_OWNER/oss_repo.
---fork, -f              Fork GitHub repository, e.g. YOUR_NAME/oss_repo.
+--provider              Repository provider: auto, github, or gitlab.
+--upstream, -u          Upstream repository, e.g. UPSTREAM_OWNER/oss_repo.
+--fork, -f              Fork repository, e.g. YOUR_NAME/oss_repo.
 --out, -o               Output directory. Default: agent_context
 --agent-file            Generated agent instruction file. Default: AGENT.md
 --issue-limit           Maximum number of issues to fetch. Default: 300
@@ -447,8 +474,7 @@ uv run mypy src
 - Do not modify project source code.
 - Do not commit generated context unless explicitly intended.
 - Make repository detection automatic but overridable.
-- Keep the first version GitHub-only.
-- Structure the code so that GitLab or Gitea providers can be added later.
+- Structure the code so that additional providers can be added later.
 - Treat 100% statement coverage as a guardrail, not as proof of correctness. Output stability and behavior-focused tests matter more than coverage alone.
 
 ## Suggested `.gitignore` behavior
@@ -468,7 +494,7 @@ See [ROADMAP.md](ROADMAP.md).
 
 ## Suggested Repository Topics
 
-Useful GitHub repository topics:
+Useful repository topics:
 
 ```text
 agentic-coding

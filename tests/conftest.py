@@ -13,6 +13,7 @@ from repo_agent_context.model import ContextConfig
 def config_factory() -> Callable[..., ContextConfig]:
     def factory(
         *,
+        provider: str = "github",
         out_dir: Path = Path("agent_context"),
         agent_file: Path = Path("AGENT.md"),
         fork: str | None = "fork/repo",
@@ -24,6 +25,7 @@ def config_factory() -> Callable[..., ContextConfig]:
         update_gitignore: bool = False,
     ) -> ContextConfig:
         return ContextConfig(
+            provider=provider,
             upstream="owner/repo",
             fork=fork,
             out_dir=out_dir,
