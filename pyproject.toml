@@ -1,9 +1,14 @@
+[build-system]
+requires = ["setuptools>=77.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "repo-agent-context"
 version = "0.1.0"
 description = "Build local issue and pull request context for coding agents."
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Arno Waschk", email = "arno@arnow.solutions" }
 ]
@@ -54,8 +59,14 @@ dev = [
 [tool.uv]
 package = true
 
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]

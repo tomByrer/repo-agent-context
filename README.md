@@ -8,6 +8,14 @@ The generated context is intended for local use inside a cloned repository. It i
 
 It is intentionally plain Markdown and JSON. There is no hosted service, vector database, background daemon, or agent framework dependency.
 
+The JSON files are written compactly to keep token usage low for downstream agents.
+
+## How It Works
+
+1. Detect the upstream and fork repositories, plus the branch base for branch-ahead context.
+2. Fetch issues, pull requests, CI status, comments, diffs, and local branch data.
+3. Write compact Markdown and JSON files into `agent_context/` together with a generated `AGENT.md`.
+
 ## Use case
 
 Typical questions after generating the context:
@@ -39,6 +47,12 @@ The tool is especially useful when maintaining or contributing to existing open-
 
 Local files are easy for terminal agents and local LLM workflows to inspect. They also keep repository context close to the clone, avoid repeated GitHub API lookups during analysis, and make it clear what snapshot the agent is using.
 
+## Known Limitations
+
+- Relation detection is heuristic and based on textual references.
+- Branch-ahead data depends on local remote refs. Run `git fetch upstream` before building if you need fresh data.
+- Generated files are snapshots, not live GitHub state.
+
 ## Requirements
 
 - Python 3.10 or newer
@@ -46,10 +60,10 @@ Local files are easy for terminal agents and local LLM workflows to inspect. The
 - GitHub CLI: `gh`
 - An authenticated GitHub CLI session
 
-Install and authenticate GitHub CLI:
+Install GitHub CLI from https://cli.github.com/ or with your platform package manager
+(Homebrew on macOS, winget on Windows, apt/dnf/pacman on Linux), then authenticate with:
 
 ```bash
-sudo apt install gh
 gh auth login
 ```
 
@@ -425,7 +439,8 @@ See [ROADMAP.md](ROADMAP.md).
 
 ## Support
 
-If this tool saves you maintainer time, support is appreciated but not expected:
+If this tool saves you maintainer time, optional support via Buy Me a Coffee is appreciated
+but not expected:
 https://buymeacoffee.com/arnwas
 
 ## License

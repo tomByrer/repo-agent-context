@@ -34,10 +34,63 @@ def test_write_json_and_text_create_parent_directories(tmp_path: Path) -> None:
     cli.write_json(tmp_path / "nested" / "data.json", {"snowman": "ok"})
     cli.write_text(tmp_path / "nested" / "text.md", "hello")
 
+    assert (tmp_path / "nested" / "data.json").read_text(encoding="utf-8") == '{"snowman":"ok"}'
     assert json.loads((tmp_path / "nested" / "data.json").read_text(encoding="utf-8")) == {
         "snowman": "ok"
     }
     assert (tmp_path / "nested" / "text.md").read_text(encoding="utf-8") == "hello"
+
+
+def test_build_context_items_writes_full_items_and_invokes_extra_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., ContextConfig],
+) -> None:
+    calls: list[str] = []
+
+    def fake_gh_json(args: list[str]) -> object:
+        if args[:2] == ["issue", "list"]:
+            return [{"number": 1, "title": "Issue 1"}]
+        return {"number": 1, "title": "Issue 1"}
+
+    monkeypatch.setattr(cli, "gh_json", fake_gh_json)
+    monkeypatch.setattr(cli, "track", lambda items, description: items)
+
+    result = cli.build_context_items(
+        config=config_factory(out_dir=tmp_path / "agent_context", agent_file=tmp_path / "AGENT.md"),
+        list_args=["issue", "list"],
+        item_kind="issues",
+        item_dir=tmp_path / "agent_context" / "issues",
+        list_filename="issues.json",
+        view_args_factory=lambda number: ["issue", "view", number],
+        render_item=lambda item: "rendered",
+        extra_writer=lambda number, item: calls.append(number),
+    )
+
+    assert result == [{"number": 1, "title": "Issue 1"}]
+    assert calls == ["1"]
+    assert (tmp_path / "agent_context" / "issues" / "1.json").exists()
+    assert (tmp_path / "agent_context" / "issues" / "1.md").read_text(encoding="utf-8") == "rendered"
+
+
+def test_build_context_items_rejects_missing_number(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., ContextConfig],
+) -> None:
+    monkeypatch.setattr(cli, "gh_json", lambda args: [{}] if args[:2] == ["issue", "list"] else {})
+    monkeypatch.setattr(cli, "track", lambda items, description: items)
+
+    with pytest.raises(typer.BadParameter, match="missing a number"):
+        cli.build_context_items(
+            config=config_factory(out_dir=tmp_path / "agent_context", agent_file=tmp_path / "AGENT.md"),
+            list_args=["issue", "list"],
+            item_kind="issues",
+            item_dir=tmp_path / "agent_context" / "issues",
+            list_filename="issues.json",
+            view_args_factory=lambda number: ["issue", "view", number],
+            render_item=lambda item: "rendered",
+        )
 
 
 def test_build_issues_fetches_list_and_full_items(
@@ -400,3 +453,13 @@ def test_refresh_wraps_detection_errors_without_metadata(
 
 def test_main_callback_is_noop() -> None:
     assert cli.main() is None
+
+
+def test_print_support_mentions_buymeacoffee_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    lines: list[str] = []
+    monkeypatch.setattr(cli.console, "print", lambda *args, **kwargs: lines.append(" ".join(str(arg) for arg in args)))
+
+    cli.print_support()
+
+    assert any("Buy Me a Coffee" in line for line in lines)
+    assert any(cli.SUPPORT_URL in line for line in lines)

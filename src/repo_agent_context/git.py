@@ -133,7 +133,15 @@ def remote_branch_refs(remote_name: str) -> list[tuple[str, str, str]]:
 
     refs: list[tuple[str, str, str]] = []
     for line in output.splitlines():
-        ref_name, _, oid = line.partition("\t")
+        if "\t" not in line:
+            continue
+
+        ref_name, oid = line.split("\t", 1)
+        ref_name = ref_name.strip()
+        oid = oid.strip()
+
+        if not ref_name or not oid:
+            continue
         if not ref_name.startswith(prefix):
             continue
 
@@ -144,6 +152,22 @@ def remote_branch_refs(remote_name: str) -> list[tuple[str, str, str]]:
         refs.append((branch_name, ref_name, oid))
 
     return refs
+
+
+def parse_rev_list_counts(output: str) -> tuple[int, int]:
+    parts = output.split()
+    if len(parts) != 2:
+        raise GitDetectionError(f"Unexpected branch comparison output: {output!r}")
+
+    behind_text, ahead_text = parts
+
+    try:
+        behind_by = int(behind_text)
+        ahead_by = int(ahead_text)
+    except ValueError as exc:
+        raise GitDetectionError(f"Unexpected branch comparison counts: {output!r}") from exc
+
+    return behind_by, ahead_by
 
 
 def default_branch_for_remote(remote_name: str, fallback: str = "master") -> str:
@@ -227,13 +251,18 @@ def branches_ahead_of_base(repo: str, base_branch: str | None = None) -> dict[st
         }
 
     branches: list[dict[str, Any]] = []
+    warnings: list[str] = []
     for branch_name, ref_name, oid in remote_branch_refs(remote_name):
         if branch_name == base_branch:
             continue
 
         counts = run_git(["rev-list", "--left-right", "--count", f"{base_ref}...{ref_name}"])
-        behind_text, ahead_text = counts.split()
-        ahead_by = int(ahead_text)
+        try:
+            behind_by, ahead_by = parse_rev_list_counts(counts)
+        except GitDetectionError as exc:
+            warnings.append(f"Skipping branch {branch_name}: {exc}")
+            continue
+
         if ahead_by == 0:
             continue
 
@@ -243,7 +272,7 @@ def branches_ahead_of_base(repo: str, base_branch: str | None = None) -> dict[st
                 "ref": ref_name,
                 "oid": oid,
                 "aheadBy": ahead_by,
-                "behindBy": int(behind_text),
+                "behindBy": behind_by,
                 "commits": commits_ahead_of_base(ref_name, base_ref),
             }
         )
@@ -257,6 +286,7 @@ def branches_ahead_of_base(repo: str, base_branch: str | None = None) -> dict[st
         "baseBranchSource": base_branch_source,
         "baseRef": base_ref,
         "branches": branches,
+        **({"warning": "; ".join(warnings)} if warnings else {}),
     }
 
 

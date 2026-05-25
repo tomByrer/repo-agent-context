@@ -12,12 +12,30 @@ ISSUE_REFERENCE_RE = re.compile(
     r"relate[sd]?"
     r")?\s*#(?P<number>\d+)"
 )
+FENCED_CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
+
+CI_STATE_PRIORITY = {
+    "FAILURE": 0,
+    "ERROR": 0,
+    "ACTION_REQUIRED": 1,
+    "PENDING": 2,
+    "QUEUED": 2,
+    "REQUESTED": 2,
+    "STARTED": 2,
+    "CANCELLED": 3,
+    "TIMED_OUT": 3,
+    "SUCCESS": 4,
+    "NEUTRAL": 5,
+    "SKIPPED": 5,
+    "UNKNOWN": 6,
+}
 
 
 def extract_references_from_text(text: str) -> set[int]:
     references: set[int] = set()
+    text_without_fenced_code = FENCED_CODE_BLOCK_RE.sub("", text or "")
 
-    for match in ISSUE_REFERENCE_RE.finditer(text or ""):
+    for match in ISSUE_REFERENCE_RE.finditer(text_without_fenced_code):
         references.add(int(match.group("number")))
 
     return references
@@ -197,7 +215,12 @@ def ci_summary(status_check_rollup: list[dict[str, Any]]) -> str:
         return "no checks"
 
     counts = ci_status_counts(status_check_rollup)
-    return ", ".join(f"{state.lower()}: {count}" for state, count in sorted(counts.items()))
+
+    def sort_key(item: tuple[str, int]) -> tuple[int, str]:
+        state, _ = item
+        return (CI_STATE_PRIORITY.get(state, 99), state)
+
+    return ", ".join(f"{state.lower()}: {count}" for state, count in sorted(counts.items(), key=sort_key))
 
 
 def is_attention_check(check: dict[str, Any]) -> bool:
@@ -208,7 +231,13 @@ def render_ci_status(status_check_rollup: list[dict[str, Any]]) -> str:
     if not status_check_rollup:
         return "_No CI status checks listed._"
 
-    attention_checks = [check for check in status_check_rollup if is_attention_check(check)]
+    attention_checks = sorted(
+        (check for check in status_check_rollup if is_attention_check(check)),
+        key=lambda check: (
+            CI_STATE_PRIORITY.get(check_state(check), 99),
+            check_name(check).lower(),
+        ),
+    )
     lines = [f"Summary: {ci_summary(status_check_rollup)}"]
 
     if not attention_checks:

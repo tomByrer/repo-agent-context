@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -45,10 +46,8 @@ PR_VIEW_FIELDS = (
 
 def print_support() -> None:
     console.print()
-    console.print(
-        "If repo-agent-context saves you maintainer time, support is appreciated: "
-        f"[bold]{SUPPORT_URL}[/bold]"
-    )
+    console.print("If repo-agent-context saves you maintainer time, support is appreciated:")
+    console.print(f"Buy Me a Coffee: [bold]{SUPPORT_URL}[/bold]")
 
 
 def load_metadata(path: Path) -> dict[str, Any]:
@@ -107,7 +106,7 @@ def update_gitignore(config: ContextConfig) -> None:
 
 def write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
 def write_text(path: Path, text: str) -> None:
@@ -115,11 +114,43 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def build_context_items(
+    *,
+    config: ContextConfig,
+    list_args: list[str],
+    item_kind: str,
+    item_dir: Path,
+    list_filename: str,
+    view_args_factory: Callable[[str], list[str]],
+    render_item: Callable[[dict[str, Any]], str],
+    extra_writer: Callable[[str, dict[str, Any]], None] | None = None,
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = gh_json(list_args)
+    write_json(config.out_dir / list_filename, items)
+
+    full_items: list[dict[str, Any]] = []
+    for item in track(items, description=f"Fetching {item_kind}"):
+        number_value = item.get("number")
+        if number_value is None:
+            raise typer.BadParameter(f"{item_kind.capitalize()} entry is missing a number: {item!r}")
+
+        number = str(number_value)
+        full: dict[str, Any] = gh_json(view_args_factory(number))
+        full_items.append(full)
+        write_json(item_dir / f"{number}.json", full)
+        write_text(item_dir / f"{number}.md", render_item(full))
+
+        if extra_writer is not None:
+            extra_writer(number, full)
+
+    return full_items
+
+
 def build_issues(config: ContextConfig) -> list[dict[str, Any]]:
     state = "all" if config.include_closed else "open"
-
-    issues = gh_json(
-        [
+    return build_context_items(
+        config=config,
+        list_args=[
             "issue",
             "list",
             "--repo",
@@ -130,38 +161,35 @@ def build_issues(config: ContextConfig) -> list[dict[str, Any]]:
             str(config.issue_limit),
             "--json",
             ISSUE_LIST_FIELDS,
-        ]
+        ],
+        item_kind="issues",
+        item_dir=config.out_dir / "issues",
+        list_filename="issues.json",
+        view_args_factory=lambda number: [
+            "issue",
+            "view",
+            number,
+            "--repo",
+            config.upstream,
+            "--comments",
+            "--json",
+            ISSUE_VIEW_FIELDS,
+        ],
+        render_item=render_issue,
     )
-
-    write_json(config.out_dir / "issues.json", issues)
-
-    full_issues: list[dict[str, Any]] = []
-    for issue in track(issues, description="Fetching issues"):
-        number = str(issue["number"])
-        full = gh_json(
-            [
-                "issue",
-                "view",
-                number,
-                "--repo",
-                config.upstream,
-                "--comments",
-                "--json",
-                ISSUE_VIEW_FIELDS,
-            ]
-        )
-        full_issues.append(full)
-        write_json(config.out_dir / "issues" / f"{number}.json", full)
-        write_text(config.out_dir / "issues" / f"{number}.md", render_issue(full))
-
-    return full_issues
 
 
 def build_prs(config: ContextConfig) -> list[dict[str, Any]]:
     state = "all" if config.include_closed else "open"
+    item_dir = config.out_dir / "prs"
 
-    prs = gh_json(
-        [
+    def write_diff(number: str, _: dict[str, Any]) -> None:
+        diff = run_gh(["pr", "diff", number, "--repo", config.upstream])
+        write_text(item_dir / f"{number}.diff", diff)
+
+    return build_context_items(
+        config=config,
+        list_args=[
             "pr",
             "list",
             "--repo",
@@ -172,34 +200,23 @@ def build_prs(config: ContextConfig) -> list[dict[str, Any]]:
             str(config.pr_limit),
             "--json",
             PR_LIST_FIELDS,
-        ]
+        ],
+        item_kind="pull requests",
+        item_dir=item_dir,
+        list_filename="prs.json",
+        view_args_factory=lambda number: [
+            "pr",
+            "view",
+            number,
+            "--repo",
+            config.upstream,
+            "--comments",
+            "--json",
+            PR_VIEW_FIELDS,
+        ],
+        render_item=render_pr,
+        extra_writer=write_diff,
     )
-
-    write_json(config.out_dir / "prs.json", prs)
-
-    full_prs: list[dict[str, Any]] = []
-    for pr in track(prs, description="Fetching pull requests"):
-        number = str(pr["number"])
-        full = gh_json(
-            [
-                "pr",
-                "view",
-                number,
-                "--repo",
-                config.upstream,
-                "--comments",
-                "--json",
-                PR_VIEW_FIELDS,
-            ]
-        )
-        full_prs.append(full)
-        write_json(config.out_dir / "prs" / f"{number}.json", full)
-        write_text(config.out_dir / "prs" / f"{number}.md", render_pr(full))
-
-        diff = run_gh(["pr", "diff", number, "--repo", config.upstream])
-        write_text(config.out_dir / "prs" / f"{number}.diff", diff)
-
-    return full_prs
 
 
 def build_branches(config: ContextConfig) -> dict[str, Any]:

@@ -165,6 +165,10 @@ def test_extract_references_from_comments_handles_missing_bodies() -> None:
     assert extract_references_from_comments([{}, {"body": "Closes #4"}]) == {4}
 
 
+def test_extract_references_ignores_fenced_code_blocks() -> None:
+    assert extract_references_from_text("```python\nFixes #7\n```") == set()
+
+
 def test_author_and_labels_fallback_for_missing_or_empty_values() -> None:
     assert author_login({}) == "unknown"
     assert author_login({"author": {"login": "alice"}}) == "alice"
@@ -183,6 +187,13 @@ def test_ci_helpers_use_fallback_fields_and_unknown_defaults() -> None:
     assert [check_state(check) for check in checks] == ["PENDING", "QUEUED", "NEUTRAL", "UNKNOWN"]
     assert ci_status_counts(checks) == {"PENDING": 1, "QUEUED": 1, "NEUTRAL": 1, "UNKNOWN": 1}
     assert ci_summary([]) == "no checks"
+    assert ci_summary(
+        [
+            {"conclusion": "SUCCESS"},
+            {"status": "PENDING"},
+            {"conclusion": "FAILURE"},
+        ]
+    ) == "failure: 1, pending: 1, success: 1"
     assert is_attention_check({"conclusion": "SUCCESS"}) is False
     assert is_attention_check({"conclusion": "SKIPPED"}) is False
     assert is_attention_check({"conclusion": "FAILURE"}) is True
@@ -199,6 +210,17 @@ def test_render_ci_status_handles_empty_success_and_target_url() -> None:
     )
 
     assert "build [pending] (https://ci)" in rendered
+
+
+def test_render_ci_status_orders_attention_checks_by_severity() -> None:
+    rendered = render_ci_status(
+        [
+            {"name": "queued", "status": "PENDING"},
+            {"name": "tests", "conclusion": "FAILURE"},
+        ]
+    )
+
+    assert rendered.index("tests [failure]") < rendered.index("queued [pending]")
 
 
 def test_render_comments_includes_author_created_and_body() -> None:
@@ -315,6 +337,29 @@ def test_render_relations_covers_unverified_and_self_reference_comment_paths() -
     assert "PR #10 references Issue #997 (comment/unverified)" in rendered
     assert "Issue #1 references Issue #1" not in rendered
     assert "PR #10 references PR #10" not in rendered
+
+
+def test_render_relations_ignores_references_inside_code_fences() -> None:
+    rendered = render_relations(
+        [
+            {
+                "number": 1,
+                "title": "Issue",
+                "body": "",
+                "comments": [],
+            }
+        ],
+        [
+            {
+                "number": 2,
+                "title": "PR",
+                "body": "```python\nFixes #1\n```",
+                "comments": [],
+            }
+        ],
+    )
+
+    assert "PR #2 references Issue #1" not in rendered
 
 
 def test_render_branches_ahead_handles_warning_empty_and_commitless_branch() -> None:

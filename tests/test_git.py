@@ -122,6 +122,8 @@ def test_remote_branch_refs_filters_head_and_wrong_prefix(monkeypatch: pytest.Mo
                 "refs/remotes/upstream/feature/foo\t222",
                 "refs/remotes/upstream/HEAD\t333",
                 "refs/remotes/origin/feature\t444",
+                "refs/remotes/upstream/bad-line",
+                "\t555",
             ]
         ),
     )
@@ -187,6 +189,16 @@ def test_commit_summary_from_log_line_accepts_separator_in_subject() -> None:
 
 def test_commit_summary_from_log_line_rejects_malformed_line() -> None:
     assert git.commit_summary_from_log_line("too\x1ffew") is None
+
+
+def test_parse_rev_list_counts_rejects_malformed_output() -> None:
+    with pytest.raises(GitDetectionError):
+        git.parse_rev_list_counts("unexpected output")
+
+
+def test_parse_rev_list_counts_rejects_wrong_field_count() -> None:
+    with pytest.raises(GitDetectionError):
+        git.parse_rev_list_counts("bad")
 
 
 def test_commits_ahead_of_base_skips_malformed_log_lines(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -273,6 +285,27 @@ def test_branches_ahead_of_base_collects_and_sorts_ahead_branches(
     assert [branch["name"] for branch in data["branches"]] == ["large", "small"]
     assert data["branches"][0]["aheadBy"] == 3
     assert data["branches"][0]["behindBy"] == 2
+
+
+def test_branches_ahead_of_base_skips_malformed_counts_and_reports_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(git, "remote_name_for_repo", lambda repo: "upstream")
+    monkeypatch.setattr(git, "default_branch_for_remote", lambda remote: "main")
+    monkeypatch.setattr(git, "remote_branch_refs", lambda remote: [("feature", "refs/remotes/upstream/feature", "111")])
+
+    def fake_try_run_git(args: list[str]) -> str | None:
+        if args[:3] == ["rev-parse", "--verify", "--quiet"]:
+            return "ok"
+        return None
+
+    monkeypatch.setattr(git, "try_run_git", fake_try_run_git)
+    monkeypatch.setattr(git, "run_git", lambda args: "unexpected output")
+
+    data = git.branches_ahead_of_base("owner/repo")
+
+    assert data["branches"] == []
+    assert "Skipping branch feature" in data["warning"]
 
 
 def test_detect_upstream_and_fork_uses_explicit_values(
