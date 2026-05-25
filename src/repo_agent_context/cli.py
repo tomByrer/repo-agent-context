@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -509,5 +510,23 @@ def refresh(
 
 
 @app.callback()
-def main() -> None:
-    pass
+def main(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            help="Show the installed version and exit.",
+            is_eager=True,
+            callback=lambda value: _version_callback(value),
+        ),
+    ] = False,
+) -> None:
+    return None
+
+
+def _version_callback(value: bool) -> bool:
+    if value:
+        console.print(f"repo-agent-context {version('repo-agent-context')}")
+        raise typer.Exit()
+
+    return value

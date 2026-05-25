@@ -2,14 +2,29 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
 import typer
+from typer.testing import CliRunner
 
 import repo_agent_context.cli as cli
 from repo_agent_context.git import GitDetectionError
 from repo_agent_context.model import ContextConfig
+
+
+def test_version_option_prints_version_and_exits() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli.app, ["--version"])
+
+    assert result.exit_code == 0
+    assert f"repo-agent-context {version('repo-agent-context')}" in result.stdout
+
+
+def test_version_callback_passthrough_when_disabled() -> None:
+    assert cli._version_callback(False) is False
 
 
 def test_load_metadata_reads_json_and_raises_for_missing(tmp_path: Path) -> None:
