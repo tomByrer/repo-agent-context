@@ -14,8 +14,7 @@ def run_gh(args: list[str]) -> str:
     result = subprocess.run(
         command,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
 

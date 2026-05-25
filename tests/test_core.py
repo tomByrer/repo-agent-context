@@ -1,54 +1,34 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+from repo_agent_context.cli import update_gitignore
 from repo_agent_context.git import github_repo_from_url
 from repo_agent_context.model import ContextConfig
 from repo_agent_context.render import render_issue, render_pr, render_relations
 
-# If update_gitignore lives in cli.py:
-from repo_agent_context.cli import update_gitignore
-
-
-def make_config(
-    *,
-    out_dir: Path = Path("agent_context"),
-    agent_file: Path = Path("AGENT.md"),
-    update_gitignore_file: bool = True,
-) -> ContextConfig:
-    return ContextConfig(
-        upstream="owner/repo",
-        fork="user/repo",
-        out_dir=out_dir,
-        agent_file=agent_file,
-        issue_limit=300,
-        pr_limit=300,
-        include_closed=False,
-        overwrite_agent=False,
-        update_gitignore=update_gitignore_file,
-    )
-
 
 def test_github_repo_from_ssh_url() -> None:
-    assert github_repo_from_url("git@github.com:bndr/pipreqs.git") == "bndr/pipreqs"
+    assert github_repo_from_url("git@github.com:UPSTREAM_OWNER/oss_repo.git") == "UPSTREAM_OWNER/oss_repo"
 
 
 def test_github_repo_from_https_url_with_git_suffix() -> None:
-    assert github_repo_from_url("https://github.com/bndr/pipreqs.git") == "bndr/pipreqs"
+    assert github_repo_from_url("https://github.com/UPSTREAM_OWNER/oss_repo.git") == "UPSTREAM_OWNER/oss_repo"
 
 
 def test_github_repo_from_https_url_without_git_suffix() -> None:
-    assert github_repo_from_url("https://github.com/bndr/pipreqs") == "bndr/pipreqs"
+    assert github_repo_from_url("https://github.com/UPSTREAM_OWNER/oss_repo") == "UPSTREAM_OWNER/oss_repo"
 
 
 def test_github_repo_from_ssh_protocol_url() -> None:
-    assert github_repo_from_url("ssh://git@github.com/bndr/pipreqs.git") == "bndr/pipreqs"
+    assert github_repo_from_url("ssh://git@github.com/UPSTREAM_OWNER/oss_repo.git") == "UPSTREAM_OWNER/oss_repo"
 
 
 def test_github_repo_from_unsupported_url_returns_none() -> None:
-    assert github_repo_from_url("https://gitlab.com/bndr/pipreqs.git") is None
+    assert github_repo_from_url("https://gitlab.com/UPSTREAM_OWNER/oss_repo.git") is None
 
 
 def test_render_issue_contains_core_fields() -> None:
@@ -241,7 +221,18 @@ def test_render_relations_marks_unknown_reference_as_unverified() -> None:
 def test_update_gitignore_creates_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
 
-    config = make_config()
+    config = ContextConfig(
+        upstream="owner/repo",
+        fork="user/repo",
+        out_dir=Path("agent_context"),
+        agent_file=Path("AGENT.md"),
+        issue_limit=300,
+        pr_limit=300,
+        base_branch=None,
+        include_closed=False,
+        overwrite_agent=False,
+        update_gitignore=True,
+    )
     update_gitignore(config)
 
     text = Path(".gitignore").read_text(encoding="utf-8")
@@ -250,10 +241,14 @@ def test_update_gitignore_creates_file(tmp_path: Path, monkeypatch: pytest.Monke
     assert "AGENT.md" in text
 
 
-def test_update_gitignore_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_update_gitignore_is_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., ContextConfig],
+) -> None:
     monkeypatch.chdir(tmp_path)
 
-    config = make_config()
+    config = config_factory(issue_limit=300, pr_limit=300, update_gitignore=True)
 
     update_gitignore(config)
     first = Path(".gitignore").read_text(encoding="utf-8")
@@ -269,12 +264,13 @@ def test_update_gitignore_is_idempotent(tmp_path: Path, monkeypatch: pytest.Monk
 def test_update_gitignore_preserves_existing_content(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., ContextConfig],
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
     Path(".gitignore").write_text("__pycache__/\n.venv/\n", encoding="utf-8")
 
-    config = make_config()
+    config = config_factory(issue_limit=300, pr_limit=300, update_gitignore=True)
     update_gitignore(config)
 
     text = Path(".gitignore").read_text(encoding="utf-8")
@@ -288,12 +284,11 @@ def test_update_gitignore_preserves_existing_content(
 def test_update_gitignore_can_be_disabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    config_factory: Callable[..., ContextConfig],
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
-    config = make_config(update_gitignore_file=False)
+    config = config_factory(issue_limit=300, pr_limit=300, update_gitignore=False)
     update_gitignore(config)
 
     assert not Path(".gitignore").exists()
-
-

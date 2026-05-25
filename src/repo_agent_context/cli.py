@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
 from rich.progress import track
 
+from repo_agent_context.git import (
+    GitDetectionError,
+    branches_ahead_of_base,
+    detect_upstream_and_fork,
+)
 from repo_agent_context.github import check_gh_available, check_repo_access, gh_json, run_gh
 from repo_agent_context.model import ContextConfig
 from repo_agent_context.render import (
+    render_branches_ahead,
     render_issue,
     render_issues_index,
     render_pr,
@@ -18,20 +25,43 @@ from repo_agent_context.render import (
     render_relations,
 )
 from repo_agent_context.templates import render_agent_md
-from repo_agent_context.git import GitDetectionError, detect_upstream_and_fork
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
+DEFAULT_AGENT_FILE = Path("AGENT.md")
+DEFAULT_OUT_DIR = Path("agent_context")
+SUPPORT_URL = "https://buymeacoffee.com/arnwas"
+ISSUE_LIST_FIELDS = "number,title,state,author,labels,createdAt,updatedAt,url,body"
+ISSUE_VIEW_FIELDS = "number,title,state,author,labels,createdAt,updatedAt,url,body,comments"
+PR_LIST_FIELDS = (
+    "number,title,state,author,labels,createdAt,updatedAt,url,body,"
+    "isDraft,mergeable,reviewDecision,headRefName,baseRefName,statusCheckRollup"
+)
+PR_VIEW_FIELDS = (
+    "number,title,state,author,labels,createdAt,updatedAt,url,body,"
+    "comments,isDraft,mergeable,reviewDecision,headRefName,baseRefName,"
+    "files,commits,statusCheckRollup"
+)
+
+
+def print_support() -> None:
+    console.print()
+    console.print("If repo-agent-context saves you maintainer time, support is appreciated:")
+    console.print(f"Buy Me a Coffee: [bold]{SUPPORT_URL}[/bold]")
 
 
 def load_metadata(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise typer.BadParameter(
-            f"Metadata file not found: {path}\n"
-            "Run `repo-agent-context build` first."
+            f"Metadata file not found: {path}\nRun `repo-agent-context build` first."
         )
 
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        metadata: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"Metadata file is not valid JSON: {path}") from exc
+
+    return metadata
 
 
 def update_gitignore(config: ContextConfig) -> None:
@@ -56,11 +86,7 @@ def update_gitignore(config: ContextConfig) -> None:
         if line.strip() and not line.lstrip().startswith("#")
     }
 
-    missing_entries = [
-        entry
-        for entry in wanted_entries
-        if entry not in existing_lines
-    ]
+    missing_entries = [entry for entry in wanted_entries if entry not in existing_lines]
 
     if not missing_entries:
         return
@@ -80,7 +106,10 @@ def update_gitignore(config: ContextConfig) -> None:
 
 def write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def write_text(path: Path, text: str) -> None:
@@ -88,18 +117,43 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def build_context_items(
+    *,
+    config: ContextConfig,
+    list_args: list[str],
+    item_kind: str,
+    item_dir: Path,
+    list_filename: str,
+    view_args_factory: Callable[[str], list[str]],
+    render_item: Callable[[dict[str, Any]], str],
+    extra_writer: Callable[[str, dict[str, Any]], None] | None = None,
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = gh_json(list_args)
+    write_json(config.out_dir / list_filename, items)
+
+    full_items: list[dict[str, Any]] = []
+    for item in track(items, description=f"Fetching {item_kind}"):
+        number_value = item.get("number")
+        if number_value is None:
+            raise typer.BadParameter(f"{item_kind.capitalize()} entry is missing a number: {item!r}")
+
+        number = str(number_value)
+        full: dict[str, Any] = gh_json(view_args_factory(number))
+        full_items.append(full)
+        write_json(item_dir / f"{number}.json", full)
+        write_text(item_dir / f"{number}.md", render_item(full))
+
+        if extra_writer is not None:
+            extra_writer(number, full)
+
+    return full_items
+
+
 def build_issues(config: ContextConfig) -> list[dict[str, Any]]:
     state = "all" if config.include_closed else "open"
-
-    list_fields = (
-        "number,title,state,author,labels,createdAt,updatedAt,url,body"
-    )
-    view_fields = (
-        "number,title,state,author,labels,createdAt,updatedAt,url,body,comments"
-    )
-
-    issues = gh_json(
-        [
+    return build_context_items(
+        config=config,
+        list_args=[
             "issue",
             "list",
             "--repo",
@@ -109,49 +163,36 @@ def build_issues(config: ContextConfig) -> list[dict[str, Any]]:
             "--limit",
             str(config.issue_limit),
             "--json",
-            list_fields,
-        ]
+            ISSUE_LIST_FIELDS,
+        ],
+        item_kind="issues",
+        item_dir=config.out_dir / "issues",
+        list_filename="issues.json",
+        view_args_factory=lambda number: [
+            "issue",
+            "view",
+            number,
+            "--repo",
+            config.upstream,
+            "--comments",
+            "--json",
+            ISSUE_VIEW_FIELDS,
+        ],
+        render_item=render_issue,
     )
-
-    write_json(config.out_dir / "issues.json", issues)
-
-    full_issues: list[dict[str, Any]] = []
-    for issue in track(issues, description="Fetching issues"):
-        number = str(issue["number"])
-        full = gh_json(
-            [
-                "issue",
-                "view",
-                number,
-                "--repo",
-                config.upstream,
-                "--comments",
-                "--json",
-                view_fields,
-            ]
-        )
-        full_issues.append(full)
-        write_json(config.out_dir / "issues" / f"{number}.json", full)
-        write_text(config.out_dir / "issues" / f"{number}.md", render_issue(full))
-
-    return full_issues
 
 
 def build_prs(config: ContextConfig) -> list[dict[str, Any]]:
     state = "all" if config.include_closed else "open"
+    item_dir = config.out_dir / "prs"
 
-    list_fields = (
-        "number,title,state,author,labels,createdAt,updatedAt,url,body,"
-        "isDraft,mergeable,reviewDecision,headRefName,baseRefName"
-    )
-    view_fields = (
-        "number,title,state,author,labels,createdAt,updatedAt,url,body,"
-        "comments,isDraft,mergeable,reviewDecision,headRefName,baseRefName,"
-        "files,commits"
-    )
+    def write_diff(number: str, _: dict[str, Any]) -> None:
+        diff = run_gh(["pr", "diff", number, "--repo", config.upstream])
+        write_text(item_dir / f"{number}.diff", diff)
 
-    prs = gh_json(
-        [
+    return build_context_items(
+        config=config,
+        list_args=[
             "pr",
             "list",
             "--repo",
@@ -161,35 +202,31 @@ def build_prs(config: ContextConfig) -> list[dict[str, Any]]:
             "--limit",
             str(config.pr_limit),
             "--json",
-            list_fields,
-        ]
+            PR_LIST_FIELDS,
+        ],
+        item_kind="pull requests",
+        item_dir=item_dir,
+        list_filename="prs.json",
+        view_args_factory=lambda number: [
+            "pr",
+            "view",
+            number,
+            "--repo",
+            config.upstream,
+            "--comments",
+            "--json",
+            PR_VIEW_FIELDS,
+        ],
+        render_item=render_pr,
+        extra_writer=write_diff,
     )
 
-    write_json(config.out_dir / "prs.json", prs)
 
-    full_prs: list[dict[str, Any]] = []
-    for pr in track(prs, description="Fetching pull requests"):
-        number = str(pr["number"])
-        full = gh_json(
-            [
-                "pr",
-                "view",
-                number,
-                "--repo",
-                config.upstream,
-                "--comments",
-                "--json",
-                view_fields,
-            ]
-        )
-        full_prs.append(full)
-        write_json(config.out_dir / "prs" / f"{number}.json", full)
-        write_text(config.out_dir / "prs" / f"{number}.md", render_pr(full))
-
-        diff = run_gh(["pr", "diff", number, "--repo", config.upstream])
-        write_text(config.out_dir / "prs" / f"{number}.diff", diff)
-
-    return full_prs
+def build_branches(config: ContextConfig) -> dict[str, Any]:
+    branches = branches_ahead_of_base(config.upstream, config.base_branch)
+    write_json(config.out_dir / "branches_ahead.json", branches)
+    write_text(config.out_dir / "index" / "branches_ahead.md", render_branches_ahead(branches))
+    return branches
 
 
 def build_metadata(config: ContextConfig) -> None:
@@ -200,6 +237,7 @@ def build_metadata(config: ContextConfig) -> None:
         "agent_file": str(config.agent_file),
         "issue_limit": config.issue_limit,
         "pr_limit": config.pr_limit,
+        "base_branch": config.base_branch,
         "include_closed": config.include_closed,
     }
 
@@ -221,12 +259,14 @@ def write_agent_file(config: ContextConfig) -> None:
     )
     write_text(config.agent_file, text)
 
+
 def run_build(config: ContextConfig) -> None:
     console.print("[bold]Detected repository configuration:[/bold]")
     console.print(f"Upstream: [bold]{config.upstream}[/bold]")
     console.print(f"Fork: [bold]{config.fork or 'none'}[/bold]")
     console.print(f"Output directory: [bold]{config.out_dir}[/bold]")
     console.print(f"Agent file: [bold]{config.agent_file}[/bold]")
+    console.print(f"Branch-ahead base: [bold]{config.base_branch or 'auto'}[/bold]")
     console.print()
 
     console.print("[bold]Checking GitHub CLI...[/bold]")
@@ -245,6 +285,7 @@ def run_build(config: ContextConfig) -> None:
 
     issues = build_issues(config)
     prs = build_prs(config)
+    branches = build_branches(config)
 
     write_text(config.out_dir / "index" / "issues_index.md", render_issues_index(issues))
     write_text(config.out_dir / "index" / "prs_index.md", render_prs_index(prs))
@@ -260,14 +301,17 @@ def run_build(config: ContextConfig) -> None:
     console.print(f"Agent file: [bold]{config.agent_file}[/bold]")
     console.print(f"Issues fetched: [bold]{len(issues)}[/bold]")
     console.print(f"Pull requests fetched: [bold]{len(prs)}[/bold]")
-
-
+    console.print(
+        f"Branches ahead of {branches.get('baseBranch')}: "
+        f"[bold]{len(branches.get('branches') or [])}[/bold]"
+    )
+    print_support()
 
 
 @app.command()
 def status(
-    upstream: str | None = typer.Option(None, "--upstream", "-u"),
-    fork: str | None = typer.Option(None, "--fork", "-f"),
+    upstream: Annotated[str | None, typer.Option("--upstream", "-u")] = None,
+    fork: Annotated[str | None, typer.Option("--fork", "-f")] = None,
 ) -> None:
     try:
         detected_upstream, detected_fork = detect_upstream_and_fork(upstream, fork)
@@ -276,62 +320,73 @@ def status(
 
     console.print(f"Upstream: [bold]{detected_upstream}[/bold]")
     console.print(f"Fork: [bold]{detected_fork or 'none'}[/bold]")
+    print_support()
+
 
 @app.command()
 def build(
-
-    upstream: str | None = typer.Option(
-        None,
-        "--upstream",
-        "-u",
-        help="Upstream GitHub repository, e.g. arnowaschk/repo-agent-context. "
-        "If omitted, it is detected from the git remote named 'upstream', "
-        "falling back to 'origin'.",
-    ),
-    fork: str | None = typer.Option(
-        None,
-        "--fork",
-        "-f",
-        help="Fork GitHub repository, e.g. myname/repo-agent-context. "
-        "If omitted, it is detected from the git remote named 'origin'.",
-    ),
-
-    out: Path = typer.Option(
-        Path("agent_context"),
-        "--out",
-        "-o",
-        help="Output directory for generated context.",
-    ),
-    agent_file: Path = typer.Option(
-        Path("AGENT.md"),
-        "--agent-file",
-        help="Path of generated AGENT.md.",
-    ),
-    issue_limit: int = typer.Option(
-        300,
-        "--issue-limit",
-        help="Maximum number of issues to fetch.",
-    ),
-    pr_limit: int = typer.Option(
-        300,
-        "--pr-limit",
-        help="Maximum number of pull requests to fetch.",
-    ),
-    include_closed: bool = typer.Option(
-        False,
-        "--include-closed",
-        help="Fetch closed issues and PRs as well.",
-    ),
-    overwrite_agent: bool = typer.Option(
-        False,
-        "--overwrite-agent",
-        help="Overwrite AGENT.md if it already exists.",
-    ),
-    update_gitignore_file: bool = typer.Option(
-        True,
-        "--update-gitignore/--no-update-gitignore",
-        help="Create or update .gitignore with generated context paths.",
-    ),
+    upstream: Annotated[
+        str | None,
+        typer.Option(
+            "--upstream",
+            "-u",
+            help="Upstream GitHub repository, e.g. arnowaschk/repo-agent-context. "
+            "If omitted, it is detected from the git remote named 'upstream', "
+            "falling back to 'origin'.",
+        ),
+    ] = None,
+    fork: Annotated[
+        str | None,
+        typer.Option(
+            "--fork",
+            "-f",
+            help="Fork GitHub repository, e.g. myname/repo-agent-context. "
+            "If omitted, it is detected from the git remote named 'origin'.",
+        ),
+    ] = None,
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out",
+            "-o",
+            help="Output directory for generated context.",
+        ),
+    ] = DEFAULT_OUT_DIR,
+    agent_file: Annotated[
+        Path,
+        typer.Option(
+            "--agent-file",
+            help="Path of generated AGENT.md.",
+        ),
+    ] = DEFAULT_AGENT_FILE,
+    issue_limit: Annotated[
+        int, typer.Option("--issue-limit", help="Maximum number of issues to fetch.")
+    ] = 300,
+    pr_limit: Annotated[
+        int, typer.Option("--pr-limit", help="Maximum number of pull requests to fetch.")
+    ] = 300,
+    include_closed: Annotated[
+        bool,
+        typer.Option("--include-closed", help="Fetch closed issues and PRs as well."),
+    ] = False,
+    overwrite_agent: Annotated[
+        bool,
+        typer.Option("--overwrite-agent", help="Overwrite AGENT.md if it already exists."),
+    ] = False,
+    update_gitignore_file: Annotated[
+        bool,
+        typer.Option(
+            "--update-gitignore/--no-update-gitignore",
+            help="Create or update .gitignore with generated context paths.",
+        ),
+    ] = True,
+    base_branch: Annotated[
+        str | None,
+        typer.Option(
+            "--base-branch",
+            help="Base branch for branch-ahead context. If omitted, detect the upstream default.",
+        ),
+    ] = None,
 ) -> None:
     try:
         detected_upstream, detected_fork = detect_upstream_and_fork(upstream, fork)
@@ -345,53 +400,68 @@ def build(
         agent_file=agent_file,
         issue_limit=issue_limit,
         pr_limit=pr_limit,
+        base_branch=base_branch,
         include_closed=include_closed,
         overwrite_agent=overwrite_agent,
         update_gitignore=update_gitignore_file,
-        )
+    )
 
     run_build(config)
 
+
 @app.command()
 def refresh(
-    out: Path = typer.Option(
-        Path("agent_context"),
-        "--out",
-        "-o",
-        help="Context directory containing metadata.json. Default: agent_context.",
-    ),
-    upstream: str | None = typer.Option(
-        None,
-        "--upstream",
-        "-u",
-        help="Upstream GitHub repository. Used only if metadata.json is missing or to override it.",
-    ),
-    fork: str | None = typer.Option(
-        None,
-        "--fork",
-        "-f",
-        help="Fork GitHub repository. Used only if metadata.json is missing or to override it.",
-    ),
-    issue_limit: int = typer.Option(
-        300,
-        "--issue-limit",
-        help="Maximum number of issues to fetch.",
-    ),
-    pr_limit: int = typer.Option(
-        300,
-        "--pr-limit",
-        help="Maximum number of pull requests to fetch.",
-    ),
-    overwrite_agent: bool = typer.Option(
-        False,
-        "--overwrite-agent",
-        help="Overwrite AGENT.md during refresh.",
-    ),
-    update_gitignore_file: bool = typer.Option(
-        True,
-        "--update-gitignore/--no-update-gitignore",
-        help="Create or update .gitignore with generated context paths.",
-    ),
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out",
+            "-o",
+            help="Context directory containing metadata.json. Default: agent_context.",
+        ),
+    ] = DEFAULT_OUT_DIR,
+    upstream: Annotated[
+        str | None,
+        typer.Option(
+            "--upstream",
+            "-u",
+            help=(
+                "Upstream GitHub repository. Used only if metadata.json is missing "
+                "or to override it."
+            ),
+        ),
+    ] = None,
+    fork: Annotated[
+        str | None,
+        typer.Option(
+            "--fork",
+            "-f",
+            help="Fork GitHub repository. Used only if metadata.json is missing or to override it.",
+        ),
+    ] = None,
+    issue_limit: Annotated[
+        int, typer.Option("--issue-limit", help="Maximum number of issues to fetch.")
+    ] = 300,
+    pr_limit: Annotated[
+        int, typer.Option("--pr-limit", help="Maximum number of pull requests to fetch.")
+    ] = 300,
+    overwrite_agent: Annotated[
+        bool,
+        typer.Option("--overwrite-agent", help="Overwrite AGENT.md during refresh."),
+    ] = False,
+    update_gitignore_file: Annotated[
+        bool,
+        typer.Option(
+            "--update-gitignore/--no-update-gitignore",
+            help="Create or update .gitignore with generated context paths.",
+        ),
+    ] = True,
+    base_branch: Annotated[
+        str | None,
+        typer.Option(
+            "--base-branch",
+            help="Override the branch-ahead base branch from metadata or auto-detection.",
+        ),
+    ] = None,
 ) -> None:
     metadata_path = out / "metadata.json"
 
@@ -405,6 +475,7 @@ def refresh(
             agent_file=Path(metadata.get("agent_file", "AGENT.md")),
             issue_limit=int(metadata.get("issue_limit", issue_limit)),
             pr_limit=int(metadata.get("pr_limit", pr_limit)),
+            base_branch=base_branch or metadata.get("base_branch"),
             include_closed=bool(metadata.get("include_closed", False)),
             overwrite_agent=overwrite_agent,
             update_gitignore=update_gitignore_file,
@@ -428,6 +499,7 @@ def refresh(
             agent_file=Path("AGENT.md"),
             issue_limit=300,
             pr_limit=300,
+            base_branch=base_branch,
             include_closed=False,
             overwrite_agent=overwrite_agent,
             update_gitignore=update_gitignore_file,

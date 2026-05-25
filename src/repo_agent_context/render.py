@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 ISSUE_REFERENCE_RE = re.compile(
     r"(?i)\b("
     r"fix(?:e[sd])?|"
@@ -13,12 +12,30 @@ ISSUE_REFERENCE_RE = re.compile(
     r"relate[sd]?"
     r")?\s*#(?P<number>\d+)"
 )
+FENCED_CODE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
+
+CI_STATE_PRIORITY = {
+    "FAILURE": 0,
+    "ERROR": 0,
+    "ACTION_REQUIRED": 1,
+    "PENDING": 2,
+    "QUEUED": 2,
+    "REQUESTED": 2,
+    "STARTED": 2,
+    "CANCELLED": 3,
+    "TIMED_OUT": 3,
+    "SUCCESS": 4,
+    "NEUTRAL": 5,
+    "SKIPPED": 5,
+    "UNKNOWN": 6,
+}
 
 
 def extract_references_from_text(text: str) -> set[int]:
     references: set[int] = set()
+    text_without_fenced_code = FENCED_CODE_BLOCK_RE.sub("", text or "")
 
-    for match in ISSUE_REFERENCE_RE.finditer(text or ""):
+    for match in ISSUE_REFERENCE_RE.finditer(text_without_fenced_code):
         references.add(int(match.group("number")))
 
     return references
@@ -167,6 +184,77 @@ def label_names(item: dict[str, Any]) -> str:
     return ", ".join(name for name in names if name)
 
 
+def check_name(check: dict[str, Any]) -> str:
+    return (
+        check.get("name")
+        or check.get("context")
+        or check.get("workflowName")
+        or check.get("title")
+        or "unknown"
+    )
+
+
+def check_state(check: dict[str, Any]) -> str:
+    conclusion = check.get("conclusion")
+    status = check.get("status")
+    state = check.get("state")
+    return str(conclusion or status or state or "UNKNOWN").upper()
+
+
+def ci_status_counts(status_check_rollup: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for check in status_check_rollup:
+        state = check_state(check)
+        counts[state] = counts.get(state, 0) + 1
+
+    return counts
+
+
+def ci_summary(status_check_rollup: list[dict[str, Any]]) -> str:
+    if not status_check_rollup:
+        return "no checks"
+
+    counts = ci_status_counts(status_check_rollup)
+
+    def sort_key(item: tuple[str, int]) -> tuple[int, str]:
+        state, _ = item
+        return (CI_STATE_PRIORITY.get(state, 99), state)
+
+    return ", ".join(f"{state.lower()}: {count}" for state, count in sorted(counts.items(), key=sort_key))
+
+
+def is_attention_check(check: dict[str, Any]) -> bool:
+    return check_state(check) not in {"SUCCESS", "SKIPPED", "NEUTRAL"}
+
+
+def render_ci_status(status_check_rollup: list[dict[str, Any]]) -> str:
+    if not status_check_rollup:
+        return "_No CI status checks listed._"
+
+    attention_checks = sorted(
+        (check for check in status_check_rollup if is_attention_check(check)),
+        key=lambda check: (
+            CI_STATE_PRIORITY.get(check_state(check), 99),
+            check_name(check).lower(),
+        ),
+    )
+    lines = [f"Summary: {ci_summary(status_check_rollup)}"]
+
+    if not attention_checks:
+        lines.append("No failing or pending checks.")
+        return "\n".join(lines)
+
+    lines.append("")
+    lines.append("Checks requiring attention:")
+    for check in attention_checks:
+        state = check_state(check).lower()
+        details_url = check.get("detailsUrl") or check.get("targetUrl") or check.get("url")
+        suffix = f" ({details_url})" if details_url else ""
+        lines.append(f"- {check_name(check)} [{state}]{suffix}")
+
+    return "\n".join(lines)
+
+
 def render_comments(comments: list[dict[str, Any]]) -> str:
     if not comments:
         return "_No comments._\n"
@@ -181,18 +269,48 @@ def render_comments(comments: list[dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
+def render_metadata_lines(lines: list[tuple[str, Any]]) -> str:
+    return "\n".join(f"- {label}: {value}" for label, value in lines)
+
+
+def render_changed_files(files: list[dict[str, Any]]) -> str:
+    lines = []
+    for changed_file in files:
+        path = changed_file.get("path", "")
+        additions = changed_file.get("additions", 0)
+        deletions = changed_file.get("deletions", 0)
+        lines.append(f"- `{path}` (+{additions}/-{deletions})")
+
+    return "\n".join(lines) if lines else "_No files listed._"
+
+
+def render_commit_list(commits: list[dict[str, Any]]) -> str:
+    lines = []
+    for commit in commits:
+        message = commit.get("messageHeadline") or commit.get("message") or ""
+        oid = commit.get("oid", "")[:12]
+        lines.append(f"- `{oid}` {message}")
+
+    return "\n".join(lines) if lines else "_No commits listed._"
+
+
 def render_issue(issue: dict[str, Any]) -> str:
     body = issue.get("body") or ""
     comments = issue.get("comments") or []
+    metadata = render_metadata_lines(
+        [
+            ("State", issue.get("state")),
+            ("Author", author_login(issue)),
+            ("Labels", label_names(issue)),
+            ("Created", issue.get("createdAt")),
+            ("Updated", issue.get("updatedAt")),
+            ("URL", issue.get("url")),
+        ]
+    )
 
     return f"""# Issue #{issue["number"]}: {issue["title"]}
 
-- State: {issue.get("state")}
-- Author: {author_login(issue)}
-- Labels: {label_names(issue)}
-- Created: {issue.get("createdAt")}
-- Updated: {issue.get("updatedAt")}
-- URL: {issue.get("url")}
+{metadata}
 
 ## Body
 
@@ -209,33 +327,26 @@ def render_pr(pr: dict[str, Any]) -> str:
     files = pr.get("files") or []
     comments = pr.get("comments") or []
     commits = pr.get("commits") or []
-
-    file_lines = []
-    for changed_file in files:
-        path = changed_file.get("path", "")
-        additions = changed_file.get("additions", 0)
-        deletions = changed_file.get("deletions", 0)
-        file_lines.append(f"- `{path}` (+{additions}/-{deletions})")
-
-    commit_lines = []
-    for commit in commits:
-        message = commit.get("messageHeadline") or commit.get("message") or ""
-        oid = commit.get("oid", "")[:12]
-        commit_lines.append(f"- `{oid}` {message}")
+    status_check_rollup = pr.get("statusCheckRollup") or []
+    metadata = render_metadata_lines(
+        [
+            ("State", pr.get("state")),
+            ("Draft", pr.get("isDraft")),
+            ("Author", author_login(pr)),
+            ("Labels", label_names(pr)),
+            ("Base", pr.get("baseRefName")),
+            ("Head", pr.get("headRefName")),
+            ("Mergeable", pr.get("mergeable")),
+            ("Review decision", pr.get("reviewDecision")),
+            ("Created", pr.get("createdAt")),
+            ("Updated", pr.get("updatedAt")),
+            ("URL", pr.get("url")),
+        ]
+    )
 
     return f"""# Pull Request #{pr["number"]}: {pr["title"]}
 
-- State: {pr.get("state")}
-- Draft: {pr.get("isDraft")}
-- Author: {author_login(pr)}
-- Labels: {label_names(pr)}
-- Base: {pr.get("baseRefName")}
-- Head: {pr.get("headRefName")}
-- Mergeable: {pr.get("mergeable")}
-- Review decision: {pr.get("reviewDecision")}
-- Created: {pr.get("createdAt")}
-- Updated: {pr.get("updatedAt")}
-- URL: {pr.get("url")}
+{metadata}
 
 ## Body
 
@@ -243,11 +354,15 @@ def render_pr(pr: dict[str, Any]) -> str:
 
 ## Changed files
 
-{chr(10).join(file_lines) if file_lines else "_No files listed._"}
+{render_changed_files(files)}
 
 ## Commits
 
-{chr(10).join(commit_lines) if commit_lines else "_No commits listed._"}
+{render_commit_list(commits)}
+
+## CI status
+
+{render_ci_status(status_check_rollup)}
 
 ## Comments
 
@@ -279,8 +394,53 @@ def render_prs_index(prs: list[dict[str, Any]]) -> str:
             f"[draft: {pr.get('isDraft')}] "
             f"[review: {pr.get('reviewDecision')}] "
             f"[mergeable: {pr.get('mergeable')}] "
+            f"[ci: {ci_summary(pr.get('statusCheckRollup') or [])}] "
             f"[updated: {pr.get('updatedAt')}]"
         )
 
     return "\n".join(lines) + "\n"
 
+
+def render_branches_ahead(data: dict[str, Any]) -> str:
+    branches = data.get("branches") or []
+    base_branch = data.get("baseBranch") or "master"
+    lines = [
+        f"# Branches Ahead Of {base_branch}",
+        "",
+        f"- Repository: {data.get('repo')}",
+        f"- Remote: {data.get('remote') or 'unknown'}",
+        f"- Base branch: {base_branch}",
+        f"- Base branch source: {data.get('baseBranchSource') or 'unknown'}",
+        "",
+    ]
+
+    warning = data.get("warning")
+    if warning:
+        lines.append(f"Warning: {warning}")
+        lines.append("")
+
+    if not branches:
+        lines.append(f"_No branches ahead of {base_branch} found from local remote refs._")
+        return "\n".join(lines) + "\n"
+
+    for branch in branches:
+        lines.append(
+            f"## {branch.get('name')} "
+            f"[ahead: {branch.get('aheadBy')}] "
+            f"[behind: {branch.get('behindBy')}]"
+        )
+        lines.append("")
+
+        commits = branch.get("commits") or []
+        for commit in commits:
+            lines.append(
+                f"- `{commit.get('shortOid')}` {commit.get('subject')} "
+                f"[{commit.get('authoredAt')}, {commit.get('authorName')}]"
+            )
+
+        if not commits:
+            lines.append("_No commit details listed._")
+
+        lines.append("")
+
+    return "\n".join(lines)
