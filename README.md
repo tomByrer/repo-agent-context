@@ -2,7 +2,7 @@
 
 `repo-agent-context` builds a local, file-based context snapshot from a GitHub repository's issues and pull requests so that coding agents can answer questions about project state, open work, stale pull requests, likely fixes, and good first contributions without repeatedly browsing GitHub.
 
-The generated context is intended for local use inside a cloned repository. It includes issue bodies, issue comments, pull request metadata, pull request comments, changed files, diffs, index files, metadata, and a generated `AGENT.md` with instructions for coding agents.
+The generated context is intended for local use inside a cloned repository. It includes issue bodies, issue comments, pull request metadata, pull request CI status, pull request comments, changed files, diffs, branches ahead of `master`, index files, metadata, and a generated `AGENT.md` with instructions for coding agents.
 
 ## Use case
 
@@ -199,6 +199,7 @@ agent_context/
   metadata.json
   issues.json
   prs.json
+  branches_ahead.json
   issues/
     123.json
     123.md
@@ -209,6 +210,7 @@ agent_context/
   index/
     issues_index.md
     prs_index.md
+    branches_ahead.md
     relations.md
 AGENT.md
 ```
@@ -241,6 +243,7 @@ Contains rendered pull request text:
 - head branch
 - mergeability
 - review decision
+- CI status summary and checks needing attention
 - changed files
 - commits
 - comments
@@ -260,6 +263,14 @@ Compact issue index sorted by update time.
 ### `agent_context/index/prs_index.md`
 
 Compact pull request index sorted by update time.
+
+### `agent_context/branches_ahead.json`
+
+Compact structured data for local remote branches that are ahead of `master`. It uses already-fetched local remote refs, so run `git fetch upstream` before building if you need fresh branch data.
+
+### `agent_context/index/branches_ahead.md`
+
+Markdown summary of branches ahead of `master`, including each ahead commit's short SHA, subject, author, and authored time.
 
 ### `agent_context/index/relations.md`
 

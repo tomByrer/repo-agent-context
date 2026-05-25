@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 ISSUE_REFERENCE_RE = re.compile(
     r"(?i)\b("
     r"fix(?:e[sd])?|"
@@ -167,6 +166,66 @@ def label_names(item: dict[str, Any]) -> str:
     return ", ".join(name for name in names if name)
 
 
+def check_name(check: dict[str, Any]) -> str:
+    return (
+        check.get("name")
+        or check.get("context")
+        or check.get("workflowName")
+        or check.get("title")
+        or "unknown"
+    )
+
+
+def check_state(check: dict[str, Any]) -> str:
+    conclusion = check.get("conclusion")
+    status = check.get("status")
+    state = check.get("state")
+    return str(conclusion or status or state or "UNKNOWN").upper()
+
+
+def ci_status_counts(status_check_rollup: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for check in status_check_rollup:
+        state = check_state(check)
+        counts[state] = counts.get(state, 0) + 1
+
+    return counts
+
+
+def ci_summary(status_check_rollup: list[dict[str, Any]]) -> str:
+    if not status_check_rollup:
+        return "no checks"
+
+    counts = ci_status_counts(status_check_rollup)
+    return ", ".join(f"{state.lower()}: {count}" for state, count in sorted(counts.items()))
+
+
+def is_attention_check(check: dict[str, Any]) -> bool:
+    return check_state(check) not in {"SUCCESS", "SKIPPED", "NEUTRAL"}
+
+
+def render_ci_status(status_check_rollup: list[dict[str, Any]]) -> str:
+    if not status_check_rollup:
+        return "_No CI status checks listed._"
+
+    attention_checks = [check for check in status_check_rollup if is_attention_check(check)]
+    lines = [f"Summary: {ci_summary(status_check_rollup)}"]
+
+    if not attention_checks:
+        lines.append("No failing or pending checks.")
+        return "\n".join(lines)
+
+    lines.append("")
+    lines.append("Checks requiring attention:")
+    for check in attention_checks:
+        state = check_state(check).lower()
+        details_url = check.get("detailsUrl") or check.get("targetUrl") or check.get("url")
+        suffix = f" ({details_url})" if details_url else ""
+        lines.append(f"- {check_name(check)} [{state}]{suffix}")
+
+    return "\n".join(lines)
+
+
 def render_comments(comments: list[dict[str, Any]]) -> str:
     if not comments:
         return "_No comments._\n"
@@ -209,6 +268,7 @@ def render_pr(pr: dict[str, Any]) -> str:
     files = pr.get("files") or []
     comments = pr.get("comments") or []
     commits = pr.get("commits") or []
+    status_check_rollup = pr.get("statusCheckRollup") or []
 
     file_lines = []
     for changed_file in files:
@@ -249,6 +309,10 @@ def render_pr(pr: dict[str, Any]) -> str:
 
 {chr(10).join(commit_lines) if commit_lines else "_No commits listed._"}
 
+## CI status
+
+{render_ci_status(status_check_rollup)}
+
 ## Comments
 
 {render_comments(comments)}
@@ -279,8 +343,52 @@ def render_prs_index(prs: list[dict[str, Any]]) -> str:
             f"[draft: {pr.get('isDraft')}] "
             f"[review: {pr.get('reviewDecision')}] "
             f"[mergeable: {pr.get('mergeable')}] "
+            f"[ci: {ci_summary(pr.get('statusCheckRollup') or [])}] "
             f"[updated: {pr.get('updatedAt')}]"
         )
 
     return "\n".join(lines) + "\n"
 
+
+def render_branches_ahead(data: dict[str, Any]) -> str:
+    branches = data.get("branches") or []
+    base_branch = data.get("baseBranch") or "master"
+    lines = [
+        f"# Branches Ahead Of {base_branch}",
+        "",
+        f"- Repository: {data.get('repo')}",
+        f"- Remote: {data.get('remote') or 'unknown'}",
+        f"- Base branch: {base_branch}",
+        "",
+    ]
+
+    warning = data.get("warning")
+    if warning:
+        lines.append(f"Warning: {warning}")
+        lines.append("")
+
+    if not branches:
+        lines.append(f"_No branches ahead of {base_branch} found from local remote refs._")
+        return "\n".join(lines) + "\n"
+
+    for branch in branches:
+        lines.append(
+            f"## {branch.get('name')} "
+            f"[ahead: {branch.get('aheadBy')}] "
+            f"[behind: {branch.get('behindBy')}]"
+        )
+        lines.append("")
+
+        commits = branch.get("commits") or []
+        for commit in commits:
+            lines.append(
+                f"- `{commit.get('shortOid')}` {commit.get('subject')} "
+                f"[{commit.get('authoredAt')}, {commit.get('authorName')}]"
+            )
+
+        if not commits:
+            lines.append("_No commit details listed._")
+
+        lines.append("")
+
+    return "\n".join(lines)

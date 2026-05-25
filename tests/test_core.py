@@ -4,12 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from repo_agent_context.cli import update_gitignore
 from repo_agent_context.git import github_repo_from_url
 from repo_agent_context.model import ContextConfig
 from repo_agent_context.render import render_issue, render_pr, render_relations
-
-# If update_gitignore lives in cli.py:
-from repo_agent_context.cli import update_gitignore
 
 
 def make_config(
@@ -295,5 +293,4 @@ def test_update_gitignore_can_be_disabled(
     update_gitignore(config)
 
     assert not Path(".gitignore").exists()
-
 

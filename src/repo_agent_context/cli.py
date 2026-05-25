@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
 from rich.progress import track
 
+from repo_agent_context.git import (
+    GitDetectionError,
+    branches_ahead_of_base,
+    detect_upstream_and_fork,
+)
 from repo_agent_context.github import check_gh_available, check_repo_access, gh_json, run_gh
 from repo_agent_context.model import ContextConfig
 from repo_agent_context.render import (
+    render_branches_ahead,
     render_issue,
     render_issues_index,
     render_pr,
@@ -18,10 +24,11 @@ from repo_agent_context.render import (
     render_relations,
 )
 from repo_agent_context.templates import render_agent_md
-from repo_agent_context.git import GitDetectionError, detect_upstream_and_fork
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
+DEFAULT_AGENT_FILE = Path("AGENT.md")
+DEFAULT_OUT_DIR = Path("agent_context")
 
 
 def load_metadata(path: Path) -> dict[str, Any]:
@@ -31,7 +38,8 @@ def load_metadata(path: Path) -> dict[str, Any]:
             "Run `repo-agent-context build` first."
         )
 
-    return json.loads(path.read_text(encoding="utf-8"))
+    metadata: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    return metadata
 
 
 def update_gitignore(config: ContextConfig) -> None:
@@ -142,12 +150,12 @@ def build_prs(config: ContextConfig) -> list[dict[str, Any]]:
 
     list_fields = (
         "number,title,state,author,labels,createdAt,updatedAt,url,body,"
-        "isDraft,mergeable,reviewDecision,headRefName,baseRefName"
+        "isDraft,mergeable,reviewDecision,headRefName,baseRefName,statusCheckRollup"
     )
     view_fields = (
         "number,title,state,author,labels,createdAt,updatedAt,url,body,"
         "comments,isDraft,mergeable,reviewDecision,headRefName,baseRefName,"
-        "files,commits"
+        "files,commits,statusCheckRollup"
     )
 
     prs = gh_json(
@@ -190,6 +198,13 @@ def build_prs(config: ContextConfig) -> list[dict[str, Any]]:
         write_text(config.out_dir / "prs" / f"{number}.diff", diff)
 
     return full_prs
+
+
+def build_branches(config: ContextConfig) -> dict[str, Any]:
+    branches = branches_ahead_of_base(config.upstream)
+    write_json(config.out_dir / "branches_ahead.json", branches)
+    write_text(config.out_dir / "index" / "branches_ahead.md", render_branches_ahead(branches))
+    return branches
 
 
 def build_metadata(config: ContextConfig) -> None:
@@ -245,6 +260,7 @@ def run_build(config: ContextConfig) -> None:
 
     issues = build_issues(config)
     prs = build_prs(config)
+    branches = build_branches(config)
 
     write_text(config.out_dir / "index" / "issues_index.md", render_issues_index(issues))
     write_text(config.out_dir / "index" / "prs_index.md", render_prs_index(prs))
@@ -260,6 +276,7 @@ def run_build(config: ContextConfig) -> None:
     console.print(f"Agent file: [bold]{config.agent_file}[/bold]")
     console.print(f"Issues fetched: [bold]{len(issues)}[/bold]")
     console.print(f"Pull requests fetched: [bold]{len(prs)}[/bold]")
+    console.print(f"Branches ahead of master: [bold]{len(branches.get('branches') or [])}[/bold]")
 
 
 
@@ -296,17 +313,21 @@ def build(
         "If omitted, it is detected from the git remote named 'origin'.",
     ),
 
-    out: Path = typer.Option(
-        Path("agent_context"),
-        "--out",
-        "-o",
-        help="Output directory for generated context.",
-    ),
-    agent_file: Path = typer.Option(
-        Path("AGENT.md"),
-        "--agent-file",
-        help="Path of generated AGENT.md.",
-    ),
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out",
+            "-o",
+            help="Output directory for generated context.",
+        ),
+    ] = DEFAULT_OUT_DIR,
+    agent_file: Annotated[
+        Path,
+        typer.Option(
+            "--agent-file",
+            help="Path of generated AGENT.md.",
+        ),
+    ] = DEFAULT_AGENT_FILE,
     issue_limit: int = typer.Option(
         300,
         "--issue-limit",
@@ -348,18 +369,21 @@ def build(
         include_closed=include_closed,
         overwrite_agent=overwrite_agent,
         update_gitignore=update_gitignore_file,
-        )
+    )
 
     run_build(config)
 
+
 @app.command()
 def refresh(
-    out: Path = typer.Option(
-        Path("agent_context"),
-        "--out",
-        "-o",
-        help="Context directory containing metadata.json. Default: agent_context.",
-    ),
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out",
+            "-o",
+            help="Context directory containing metadata.json. Default: agent_context.",
+        ),
+    ] = DEFAULT_OUT_DIR,
     upstream: str | None = typer.Option(
         None,
         "--upstream",

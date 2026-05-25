@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import subprocess
 from dataclasses import dataclass
+from typing import Any
 
 
 class GitDetectionError(RuntimeError):
@@ -20,8 +21,7 @@ def run_git(args: list[str]) -> str:
     result = subprocess.run(
         command,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
 
@@ -36,12 +36,25 @@ def run_git(args: list[str]) -> str:
     return result.stdout
 
 
+def try_run_git(args: list[str]) -> str | None:
+    result = subprocess.run(
+        ["git", *args],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        return None
+
+    return result.stdout
+
+
 def get_remote_url(remote_name: str) -> str | None:
     result = subprocess.run(
         ["git", "remote", "get-url", remote_name],
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
 
@@ -86,6 +99,140 @@ def detect_github_remotes() -> GitRemotes:
     upstream = github_repo_from_url(upstream_url) if upstream_url else None
 
     return GitRemotes(origin=origin, upstream=upstream)
+
+
+def remote_name_for_repo(repo: str) -> str | None:
+    remote_names = (try_run_git(["remote"]) or "").splitlines()
+
+    for preferred_name in ("upstream", "origin"):
+        if preferred_name in remote_names:
+            url = get_remote_url(preferred_name)
+            if url and github_repo_from_url(url) == repo:
+                return preferred_name
+
+    for remote_name in remote_names:
+        url = get_remote_url(remote_name)
+        if url and github_repo_from_url(url) == repo:
+            return remote_name
+
+    return None
+
+
+def remote_branch_refs(remote_name: str) -> list[tuple[str, str, str]]:
+    prefix = f"refs/remotes/{remote_name}/"
+    output = try_run_git(
+        [
+            "for-each-ref",
+            "--format=%(refname)%09%(objectname)",
+            f"refs/remotes/{remote_name}",
+        ]
+    )
+
+    if output is None:
+        return []
+
+    refs: list[tuple[str, str, str]] = []
+    for line in output.splitlines():
+        ref_name, _, oid = line.partition("\t")
+        if not ref_name.startswith(prefix):
+            continue
+
+        branch_name = ref_name.removeprefix(prefix)
+        if branch_name == "HEAD":
+            continue
+
+        refs.append((branch_name, ref_name, oid))
+
+    return refs
+
+
+def commit_summary_from_log_line(line: str) -> dict[str, Any] | None:
+    parts = line.split("\x1f", 4)
+    if len(parts) != 5:
+        return None
+
+    oid, short_oid, authored_at, author_name, subject = parts
+    return {
+        "oid": oid,
+        "shortOid": short_oid,
+        "authoredAt": authored_at,
+        "authorName": author_name,
+        "subject": subject,
+    }
+
+
+def commits_ahead_of_base(ref_name: str, base_ref: str) -> list[dict[str, Any]]:
+    output = run_git(
+        [
+            "log",
+            "--format=%H%x1f%h%x1f%aI%x1f%an%x1f%s",
+            f"{base_ref}..{ref_name}",
+        ]
+    )
+
+    commits: list[dict[str, Any]] = []
+    for line in output.splitlines():
+        commit = commit_summary_from_log_line(line)
+        if commit:
+            commits.append(commit)
+
+    return commits
+
+
+def branches_ahead_of_base(repo: str, base_branch: str = "master") -> dict[str, Any]:
+    remote_name = remote_name_for_repo(repo)
+    if remote_name is None:
+        return {
+            "repo": repo,
+            "remote": None,
+            "baseBranch": base_branch,
+            "baseRef": None,
+            "branches": [],
+            "warning": "No local git remote matches the upstream repository.",
+        }
+
+    base_ref = f"refs/remotes/{remote_name}/{base_branch}"
+    if try_run_git(["rev-parse", "--verify", "--quiet", base_ref]) is None:
+        return {
+            "repo": repo,
+            "remote": remote_name,
+            "baseBranch": base_branch,
+            "baseRef": base_ref,
+            "branches": [],
+            "warning": f"Base branch ref not found locally: {base_ref}",
+        }
+
+    branches: list[dict[str, Any]] = []
+    for branch_name, ref_name, oid in remote_branch_refs(remote_name):
+        if branch_name == base_branch:
+            continue
+
+        counts = run_git(["rev-list", "--left-right", "--count", f"{base_ref}...{ref_name}"])
+        behind_text, ahead_text = counts.split()
+        ahead_by = int(ahead_text)
+        if ahead_by == 0:
+            continue
+
+        branches.append(
+            {
+                "name": branch_name,
+                "ref": ref_name,
+                "oid": oid,
+                "aheadBy": ahead_by,
+                "behindBy": int(behind_text),
+                "commits": commits_ahead_of_base(ref_name, base_ref),
+            }
+        )
+
+    branches.sort(key=lambda branch: (-int(branch["aheadBy"]), str(branch["name"])))
+
+    return {
+        "repo": repo,
+        "remote": remote_name,
+        "baseBranch": base_branch,
+        "baseRef": base_ref,
+        "branches": branches,
+    }
 
 
 def detect_upstream_and_fork(
