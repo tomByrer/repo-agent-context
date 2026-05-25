@@ -27,8 +27,12 @@ def test_github_repo_from_ssh_protocol_url() -> None:
     assert github_repo_from_url("ssh://git@github.com/UPSTREAM_OWNER/oss_repo.git") == "UPSTREAM_OWNER/oss_repo"
 
 
-def test_github_repo_from_unsupported_url_returns_none() -> None:
-    assert github_repo_from_url("https://gitlab.com/UPSTREAM_OWNER/oss_repo.git") is None
+def test_github_repo_from_gitlab_https_url() -> None:
+    assert github_repo_from_url("https://gitlab.com/UPSTREAM_OWNER/oss_repo.git") == "UPSTREAM_OWNER/oss_repo"
+
+
+def test_github_repo_from_gitlab_ssh_url() -> None:
+    assert github_repo_from_url("git@gitlab.com:UPSTREAM_OWNER/oss_repo.git") == "UPSTREAM_OWNER/oss_repo"
 
 
 def test_render_issue_contains_core_fields() -> None:

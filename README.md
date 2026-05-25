@@ -203,13 +203,17 @@ If `--upstream` and `--fork` are omitted, the tool reads Git remotes:
 - If no `upstream` remote exists, `origin` is used as upstream.
 - If fork and upstream resolve to the same repository, fork is treated as absent.
 
-Supported GitHub remote formats:
+Supported remote formats:
 
 ```text
 git@github.com:owner/oss_repo.git
+git@gitlab.com:owner/oss_repo.git
 https://github.com/owner/oss_repo.git
+https://gitlab.com/owner/oss_repo.git
 https://github.com/owner/oss_repo
+https://gitlab.com/owner/oss_repo
 ssh://git@github.com/owner/oss_repo.git
+ssh://git@gitlab.com/owner/oss_repo.git
 ```
 
 You can verify detection without fetching data:

@@ -68,7 +68,7 @@ def test_get_remote_url_strips_stdout_and_handles_empty_or_failure(
     assert git.get_remote_url("origin") is None
 
 
-def test_detect_github_remotes_handles_missing_and_invalid_urls(
+def test_detect_github_remotes_handles_github_and_gitlab_urls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     values = {"origin": "https://github.com/owner/repo", "upstream": "https://gitlab.com/x/y"}
@@ -77,7 +77,7 @@ def test_detect_github_remotes_handles_missing_and_invalid_urls(
     remotes = git.detect_github_remotes()
 
     assert remotes.origin == "owner/repo"
-    assert remotes.upstream is None
+    assert remotes.upstream == "x/y"
 
 
 def test_remote_name_for_repo_prefers_upstream_then_origin(

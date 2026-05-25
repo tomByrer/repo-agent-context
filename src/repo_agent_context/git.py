@@ -67,18 +67,25 @@ def get_remote_url(remote_name: str) -> str | None:
 
 def github_repo_from_url(url: str) -> str | None:
     """
-    Convert common GitHub remote URLs to 'owner/repo'.
+    Convert common GitHub or GitLab remote URLs to 'owner/repo'.
 
     Supported examples:
     - git@github.com:owner/repo.git
+    - git@gitlab.com:owner/repo.git
     - https://github.com/owner/repo.git
+    - https://gitlab.com/owner/repo.git
     - https://github.com/owner/repo
+    - https://gitlab.com/owner/repo
     - ssh://git@github.com/owner/repo.git
+    - ssh://git@gitlab.com/owner/repo.git
     """
     patterns = [
         r"^git@github\.com:(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?$",
+        r"^git@gitlab\.com:(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?$",
         r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$",
+        r"^https://gitlab\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$",
         r"^ssh://git@github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$",
+        r"^ssh://git@gitlab\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?/?$",
     ]
 
     for pattern in patterns:
@@ -302,7 +309,7 @@ def detect_upstream_and_fork(
     if upstream is None:
         raise GitDetectionError(
             "Could not determine upstream repository.\n"
-            "Pass --upstream owner/repo explicitly or run this command inside a GitHub clone."
+            "Pass --upstream owner/repo explicitly or run this command inside a clone with a recognized remote."
         )
 
     if fork == upstream:
