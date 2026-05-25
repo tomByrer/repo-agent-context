@@ -1,8 +1,12 @@
 # repo-agent-context
 
+Local GitHub issue and PR context snapshots for coding agents and local LLMs.
+
 `repo-agent-context` builds a local, file-based context snapshot from a GitHub repository's issues and pull requests so that coding agents can answer questions about project state, open work, stale pull requests, likely fixes, and good first contributions without repeatedly browsing GitHub.
 
-The generated context is intended for local use inside a cloned repository. It includes issue bodies, issue comments, pull request metadata, pull request CI status, pull request comments, changed files, diffs, branches ahead of `master`, index files, metadata, and a generated `AGENT.md` with instructions for coding agents.
+The generated context is intended for local use inside a cloned repository. It includes issue bodies, issue comments, pull request metadata, pull request CI status, pull request comments, changed files, diffs, branches ahead of the upstream default branch, index files, metadata, and a generated `AGENT.md` with instructions for coding agents.
+
+It is intentionally plain Markdown and JSON. There is no hosted service, vector database, background daemon, or agent framework dependency.
 
 ## Use case
 
@@ -18,9 +22,26 @@ Typical questions after generating the context:
 
 The tool is especially useful when maintaining or contributing to existing open-source projects.
 
+## What This Is
+
+- A CLI that exports GitHub issue and pull request context into local files.
+- A way to give coding agents and local LLMs compact project state without repeated browsing.
+- A source of Markdown and JSON that humans can inspect and edit workflows around.
+
+## What This Is Not
+
+- It is not an agent.
+- It is not an MCP server.
+- It is not an embedding or vector database.
+- It does not replace GitHub as the source of truth.
+
+## Why Local Files
+
+Local files are easy for terminal agents and local LLM workflows to inspect. They also keep repository context close to the clone, avoid repeated GitHub API lookups during analysis, and make it clear what snapshot the agent is using.
+
 ## Requirements
 
-- Python 3.11 or newer
+- Python 3.10 or newer
 - Git
 - GitHub CLI: `gh`
 - An authenticated GitHub CLI session
@@ -38,20 +59,33 @@ Check access:
 gh repo view OWNER/REPO
 ```
 
-## Installation for development
+## Installation
 
-Create the project:
+Install as a CLI tool:
 
 ```bash
-mkdir -p ~/Nextcloud/src/repo-agent-context
-cd ~/Nextcloud/src/repo-agent-context
-uv init --package
-mkdir -p src/repo_agent_context tests
+uv tool install repo-agent-context
 ```
 
-Install dependencies:
+or:
 
 ```bash
+pipx install repo-agent-context
+```
+
+or:
+
+```bash
+pip install repo-agent-context
+```
+
+## Installation for Development
+
+Clone the project and install dependencies:
+
+```bash
+git clone https://github.com/arnowaschk/repo-agent-context.git
+cd repo-agent-context
 uv sync
 ```
 
@@ -61,53 +95,10 @@ Run the CLI during development:
 uv run repo-agent-context --help
 ```
 
-If `uv` warns that entry points are skipped because the project is not packaged, add this to `pyproject.toml`:
+Run the complete tox matrix where interpreters are available:
 
-```toml
-[tool.uv]
-package = true
-```
-
-## Suggested `pyproject.toml`
-
-```toml
-[project]
-name = "repo-agent-context"
-version = "0.1.0"
-description = "Build local issue and pull request context for coding agents."
-readme = "README.md"
-requires-python = ">=3.11"
-authors = [
-  { name = "Arno Waschk" }
-]
-dependencies = [
-  "typer>=0.12.0",
-  "rich>=13.0.0"
-]
-
-[project.scripts]
-repo-agent-context = "repo_agent_context.cli:app"
-
-[dependency-groups]
-dev = [
-  "pytest>=8.0.0",
-  "ruff>=0.6.0",
-  "mypy>=1.10.0"
-]
-
-[tool.uv]
-package = true
-
-[tool.ruff]
-line-length = 100
-target-version = "py311"
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
-
-[tool.mypy]
-python_version = "3.11"
-strict = true
+```bash
+uv run tox
 ```
 
 ## Basic usage
@@ -115,8 +106,8 @@ strict = true
 Inside a local clone with remotes like this:
 
 ```text
-origin    git@github.com:YOUR_NAME/pipreqs.git
-upstream  https://github.com/bndr/pipreqs.git
+origin    git@github.com:YOUR_NAME/oss_repo.git
+upstream  https://github.com/UPSTREAM_OWNER/oss_repo.git
 ```
 
 run:
@@ -128,8 +119,8 @@ repo-agent-context build
 The tool should detect:
 
 ```text
-Upstream: bndr/pipreqs
-Fork: YOUR_NAME/pipreqs
+Upstream: UPSTREAM_OWNER/oss_repo
+Fork: YOUR_NAME/oss_repo
 Output directory: agent_context
 Agent file: AGENT.md
 ```
@@ -154,8 +145,8 @@ You can also pass the repositories explicitly:
 
 ```bash
 repo-agent-context build \
-  --upstream bndr/pipreqs \
-  --fork YOUR_NAME/pipreqs \
+  --upstream UPSTREAM_OWNER/oss_repo \
+  --fork YOUR_NAME/oss_repo \
   --out agent_context \
   --agent-file AGENT.md
 ```
@@ -163,7 +154,7 @@ repo-agent-context build \
 If there is no fork:
 
 ```bash
-repo-agent-context build --upstream psf/requests
+repo-agent-context build --upstream UPSTREAM_OWNER/oss_repo
 ```
 
 ## Repository detection
@@ -178,10 +169,10 @@ If `--upstream` and `--fork` are omitted, the tool reads Git remotes:
 Supported GitHub remote formats:
 
 ```text
-git@github.com:owner/repo.git
-https://github.com/owner/repo.git
-https://github.com/owner/repo
-ssh://git@github.com/owner/repo.git
+git@github.com:owner/oss_repo.git
+https://github.com/owner/oss_repo.git
+https://github.com/owner/oss_repo
+ssh://git@github.com/owner/oss_repo.git
 ```
 
 You can verify detection without fetching data:
@@ -264,13 +255,19 @@ Compact issue index sorted by update time.
 
 Compact pull request index sorted by update time.
 
+Example:
+
+```markdown
+- #456: Fix parser crash [state: OPEN] [draft: False] [review: APPROVED] [mergeable: MERGEABLE] [ci: failure: 1, success: 4] [updated: 2026-05-25T08:30:00Z]
+```
+
 ### `agent_context/branches_ahead.json`
 
-Compact structured data for local remote branches that are ahead of `master`. It uses already-fetched local remote refs, so run `git fetch upstream` before building if you need fresh branch data.
+Compact structured data for local remote branches that are ahead of the upstream default branch. The default is detected from local remote refs. Use `--base-branch BRANCH` to override it. The data uses already-fetched local remote refs, so run `git fetch upstream` before building if you need fresh branch data.
 
 ### `agent_context/index/branches_ahead.md`
 
-Markdown summary of branches ahead of `master`, including each ahead commit's short SHA, subject, author, and authored time.
+Markdown summary of branches ahead of the selected base branch, including each ahead commit's short SHA, subject, author, and authored time.
 
 ### `agent_context/index/relations.md`
 
@@ -291,6 +288,19 @@ Contains the repository configuration used to build the snapshot.
 ### `AGENT.md`
 
 Generated instructions for a coding agent. It tells the agent where the local context is stored, how to answer questions, and what rules to follow before modifying code.
+
+## Privacy And Generated Data
+
+The generated context can contain issue bodies, PR comments, diffs, branch names, CI status, and other repository metadata. For private repositories, treat `agent_context/` and `AGENT.md` as local working files unless you intentionally want to publish that snapshot.
+
+By default, the tool updates `.gitignore` with:
+
+```gitignore
+agent_context/
+AGENT.md
+```
+
+This reduces the risk of committing local context snapshots by accident.
 
 ## Recommended workflow
 
@@ -335,13 +345,14 @@ repo-agent-context build [OPTIONS]
 Common options:
 
 ```text
---upstream, -u          Upstream GitHub repository, e.g. bndr/pipreqs.
---fork, -f              Fork GitHub repository, e.g. YOUR_NAME/pipreqs.
+--upstream, -u          Upstream GitHub repository, e.g. UPSTREAM_OWNER/oss_repo.
+--fork, -f              Fork GitHub repository, e.g. YOUR_NAME/oss_repo.
 --out, -o               Output directory. Default: agent_context
 --agent-file            Generated agent instruction file. Default: AGENT.md
 --issue-limit           Maximum number of issues to fetch. Default: 300
 --pr-limit              Maximum number of pull requests to fetch. Default: 300
 --include-closed        Fetch closed issues and PRs as well.
+--base-branch           Base branch for branch-ahead context. Default: detect upstream default.
 --overwrite-agent       Overwrite AGENT.md if it already exists.
 --no-update-gitignore   Do not create or update .gitignore.
 ```
@@ -367,6 +378,12 @@ uv run coverage run -m pytest -q
 uv run coverage report
 ```
 
+Run the tox matrix:
+
+```bash
+uv run tox
+```
+
 Run linting:
 
 ```bash
@@ -389,6 +406,7 @@ uv run mypy src
 - Make repository detection automatic but overridable.
 - Keep the first version GitHub-only.
 - Structure the code so that GitLab or Gitea providers can be added later.
+- Treat 100% statement coverage as a guardrail, not as proof of correctness. Output stability and behavior-focused tests matter more than coverage alone.
 
 ## Suggested `.gitignore` behavior
 
@@ -401,21 +419,15 @@ AGENT.md
 
 This prevents local agent context snapshots from being accidentally committed to upstream projects.
 
-## Possible future extensions
+## Roadmap
 
-Useful next features:
+See [ROADMAP.md](ROADMAP.md).
 
-1. Separate `--issue-state` and `--pr-state` options.
-2. Label filters.
-3. Date filters.
-4. A relation index that detects `Fixes #123`, `Closes #123`, and `Refs #123`.
-5. A stale PR report.
-6. A good-first-issue ranking report.
-7. Optional SQLite index.
-8. Optional embedding index.
-9. GitLab provider.
-10. Gitea provider.
+## Support
+
+If this tool saves you maintainer time, support is appreciated but not expected:
+https://buymeacoffee.com/arnwas
 
 ## License
 
-Choose a license before publishing. MIT or Apache-2.0 would both be reasonable for a small developer tool.
+MIT. See [LICENSE](LICENSE).

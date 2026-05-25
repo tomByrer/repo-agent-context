@@ -29,16 +29,39 @@ app = typer.Typer(no_args_is_help=True)
 console = Console()
 DEFAULT_AGENT_FILE = Path("AGENT.md")
 DEFAULT_OUT_DIR = Path("agent_context")
+SUPPORT_URL = "https://buymeacoffee.com/arnwas"
+ISSUE_LIST_FIELDS = "number,title,state,author,labels,createdAt,updatedAt,url,body"
+ISSUE_VIEW_FIELDS = "number,title,state,author,labels,createdAt,updatedAt,url,body,comments"
+PR_LIST_FIELDS = (
+    "number,title,state,author,labels,createdAt,updatedAt,url,body,"
+    "isDraft,mergeable,reviewDecision,headRefName,baseRefName,statusCheckRollup"
+)
+PR_VIEW_FIELDS = (
+    "number,title,state,author,labels,createdAt,updatedAt,url,body,"
+    "comments,isDraft,mergeable,reviewDecision,headRefName,baseRefName,"
+    "files,commits,statusCheckRollup"
+)
+
+
+def print_support() -> None:
+    console.print()
+    console.print(
+        "If repo-agent-context saves you maintainer time, support is appreciated: "
+        f"[bold]{SUPPORT_URL}[/bold]"
+    )
 
 
 def load_metadata(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise typer.BadParameter(
-            f"Metadata file not found: {path}\n"
-            "Run `repo-agent-context build` first."
+            f"Metadata file not found: {path}\nRun `repo-agent-context build` first."
         )
 
-    metadata: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        metadata: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"Metadata file is not valid JSON: {path}") from exc
+
     return metadata
 
 
@@ -64,11 +87,7 @@ def update_gitignore(config: ContextConfig) -> None:
         if line.strip() and not line.lstrip().startswith("#")
     }
 
-    missing_entries = [
-        entry
-        for entry in wanted_entries
-        if entry not in existing_lines
-    ]
+    missing_entries = [entry for entry in wanted_entries if entry not in existing_lines]
 
     if not missing_entries:
         return
@@ -99,13 +118,6 @@ def write_text(path: Path, text: str) -> None:
 def build_issues(config: ContextConfig) -> list[dict[str, Any]]:
     state = "all" if config.include_closed else "open"
 
-    list_fields = (
-        "number,title,state,author,labels,createdAt,updatedAt,url,body"
-    )
-    view_fields = (
-        "number,title,state,author,labels,createdAt,updatedAt,url,body,comments"
-    )
-
     issues = gh_json(
         [
             "issue",
@@ -117,7 +129,7 @@ def build_issues(config: ContextConfig) -> list[dict[str, Any]]:
             "--limit",
             str(config.issue_limit),
             "--json",
-            list_fields,
+            ISSUE_LIST_FIELDS,
         ]
     )
 
@@ -135,7 +147,7 @@ def build_issues(config: ContextConfig) -> list[dict[str, Any]]:
                 config.upstream,
                 "--comments",
                 "--json",
-                view_fields,
+                ISSUE_VIEW_FIELDS,
             ]
         )
         full_issues.append(full)
@@ -148,16 +160,6 @@ def build_issues(config: ContextConfig) -> list[dict[str, Any]]:
 def build_prs(config: ContextConfig) -> list[dict[str, Any]]:
     state = "all" if config.include_closed else "open"
 
-    list_fields = (
-        "number,title,state,author,labels,createdAt,updatedAt,url,body,"
-        "isDraft,mergeable,reviewDecision,headRefName,baseRefName,statusCheckRollup"
-    )
-    view_fields = (
-        "number,title,state,author,labels,createdAt,updatedAt,url,body,"
-        "comments,isDraft,mergeable,reviewDecision,headRefName,baseRefName,"
-        "files,commits,statusCheckRollup"
-    )
-
     prs = gh_json(
         [
             "pr",
@@ -169,7 +171,7 @@ def build_prs(config: ContextConfig) -> list[dict[str, Any]]:
             "--limit",
             str(config.pr_limit),
             "--json",
-            list_fields,
+            PR_LIST_FIELDS,
         ]
     )
 
@@ -187,7 +189,7 @@ def build_prs(config: ContextConfig) -> list[dict[str, Any]]:
                 config.upstream,
                 "--comments",
                 "--json",
-                view_fields,
+                PR_VIEW_FIELDS,
             ]
         )
         full_prs.append(full)
@@ -201,7 +203,7 @@ def build_prs(config: ContextConfig) -> list[dict[str, Any]]:
 
 
 def build_branches(config: ContextConfig) -> dict[str, Any]:
-    branches = branches_ahead_of_base(config.upstream)
+    branches = branches_ahead_of_base(config.upstream, config.base_branch)
     write_json(config.out_dir / "branches_ahead.json", branches)
     write_text(config.out_dir / "index" / "branches_ahead.md", render_branches_ahead(branches))
     return branches
@@ -215,6 +217,7 @@ def build_metadata(config: ContextConfig) -> None:
         "agent_file": str(config.agent_file),
         "issue_limit": config.issue_limit,
         "pr_limit": config.pr_limit,
+        "base_branch": config.base_branch,
         "include_closed": config.include_closed,
     }
 
@@ -236,12 +239,14 @@ def write_agent_file(config: ContextConfig) -> None:
     )
     write_text(config.agent_file, text)
 
+
 def run_build(config: ContextConfig) -> None:
     console.print("[bold]Detected repository configuration:[/bold]")
     console.print(f"Upstream: [bold]{config.upstream}[/bold]")
     console.print(f"Fork: [bold]{config.fork or 'none'}[/bold]")
     console.print(f"Output directory: [bold]{config.out_dir}[/bold]")
     console.print(f"Agent file: [bold]{config.agent_file}[/bold]")
+    console.print(f"Branch-ahead base: [bold]{config.base_branch or 'auto'}[/bold]")
     console.print()
 
     console.print("[bold]Checking GitHub CLI...[/bold]")
@@ -276,15 +281,17 @@ def run_build(config: ContextConfig) -> None:
     console.print(f"Agent file: [bold]{config.agent_file}[/bold]")
     console.print(f"Issues fetched: [bold]{len(issues)}[/bold]")
     console.print(f"Pull requests fetched: [bold]{len(prs)}[/bold]")
-    console.print(f"Branches ahead of master: [bold]{len(branches.get('branches') or [])}[/bold]")
-
-
+    console.print(
+        f"Branches ahead of {branches.get('baseBranch')}: "
+        f"[bold]{len(branches.get('branches') or [])}[/bold]"
+    )
+    print_support()
 
 
 @app.command()
 def status(
-    upstream: str | None = typer.Option(None, "--upstream", "-u"),
-    fork: str | None = typer.Option(None, "--fork", "-f"),
+    upstream: Annotated[str | None, typer.Option("--upstream", "-u")] = None,
+    fork: Annotated[str | None, typer.Option("--fork", "-f")] = None,
 ) -> None:
     try:
         detected_upstream, detected_fork = detect_upstream_and_fork(upstream, fork)
@@ -293,26 +300,30 @@ def status(
 
     console.print(f"Upstream: [bold]{detected_upstream}[/bold]")
     console.print(f"Fork: [bold]{detected_fork or 'none'}[/bold]")
+    print_support()
+
 
 @app.command()
 def build(
-
-    upstream: str | None = typer.Option(
-        None,
-        "--upstream",
-        "-u",
-        help="Upstream GitHub repository, e.g. arnowaschk/repo-agent-context. "
-        "If omitted, it is detected from the git remote named 'upstream', "
-        "falling back to 'origin'.",
-    ),
-    fork: str | None = typer.Option(
-        None,
-        "--fork",
-        "-f",
-        help="Fork GitHub repository, e.g. myname/repo-agent-context. "
-        "If omitted, it is detected from the git remote named 'origin'.",
-    ),
-
+    upstream: Annotated[
+        str | None,
+        typer.Option(
+            "--upstream",
+            "-u",
+            help="Upstream GitHub repository, e.g. arnowaschk/repo-agent-context. "
+            "If omitted, it is detected from the git remote named 'upstream', "
+            "falling back to 'origin'.",
+        ),
+    ] = None,
+    fork: Annotated[
+        str | None,
+        typer.Option(
+            "--fork",
+            "-f",
+            help="Fork GitHub repository, e.g. myname/repo-agent-context. "
+            "If omitted, it is detected from the git remote named 'origin'.",
+        ),
+    ] = None,
     out: Annotated[
         Path,
         typer.Option(
@@ -328,31 +339,34 @@ def build(
             help="Path of generated AGENT.md.",
         ),
     ] = DEFAULT_AGENT_FILE,
-    issue_limit: int = typer.Option(
-        300,
-        "--issue-limit",
-        help="Maximum number of issues to fetch.",
-    ),
-    pr_limit: int = typer.Option(
-        300,
-        "--pr-limit",
-        help="Maximum number of pull requests to fetch.",
-    ),
-    include_closed: bool = typer.Option(
-        False,
-        "--include-closed",
-        help="Fetch closed issues and PRs as well.",
-    ),
-    overwrite_agent: bool = typer.Option(
-        False,
-        "--overwrite-agent",
-        help="Overwrite AGENT.md if it already exists.",
-    ),
-    update_gitignore_file: bool = typer.Option(
-        True,
-        "--update-gitignore/--no-update-gitignore",
-        help="Create or update .gitignore with generated context paths.",
-    ),
+    issue_limit: Annotated[
+        int, typer.Option("--issue-limit", help="Maximum number of issues to fetch.")
+    ] = 300,
+    pr_limit: Annotated[
+        int, typer.Option("--pr-limit", help="Maximum number of pull requests to fetch.")
+    ] = 300,
+    include_closed: Annotated[
+        bool,
+        typer.Option("--include-closed", help="Fetch closed issues and PRs as well."),
+    ] = False,
+    overwrite_agent: Annotated[
+        bool,
+        typer.Option("--overwrite-agent", help="Overwrite AGENT.md if it already exists."),
+    ] = False,
+    update_gitignore_file: Annotated[
+        bool,
+        typer.Option(
+            "--update-gitignore/--no-update-gitignore",
+            help="Create or update .gitignore with generated context paths.",
+        ),
+    ] = True,
+    base_branch: Annotated[
+        str | None,
+        typer.Option(
+            "--base-branch",
+            help="Base branch for branch-ahead context. If omitted, detect the upstream default.",
+        ),
+    ] = None,
 ) -> None:
     try:
         detected_upstream, detected_fork = detect_upstream_and_fork(upstream, fork)
@@ -366,6 +380,7 @@ def build(
         agent_file=agent_file,
         issue_limit=issue_limit,
         pr_limit=pr_limit,
+        base_branch=base_branch,
         include_closed=include_closed,
         overwrite_agent=overwrite_agent,
         update_gitignore=update_gitignore_file,
@@ -384,38 +399,49 @@ def refresh(
             help="Context directory containing metadata.json. Default: agent_context.",
         ),
     ] = DEFAULT_OUT_DIR,
-    upstream: str | None = typer.Option(
-        None,
-        "--upstream",
-        "-u",
-        help="Upstream GitHub repository. Used only if metadata.json is missing or to override it.",
-    ),
-    fork: str | None = typer.Option(
-        None,
-        "--fork",
-        "-f",
-        help="Fork GitHub repository. Used only if metadata.json is missing or to override it.",
-    ),
-    issue_limit: int = typer.Option(
-        300,
-        "--issue-limit",
-        help="Maximum number of issues to fetch.",
-    ),
-    pr_limit: int = typer.Option(
-        300,
-        "--pr-limit",
-        help="Maximum number of pull requests to fetch.",
-    ),
-    overwrite_agent: bool = typer.Option(
-        False,
-        "--overwrite-agent",
-        help="Overwrite AGENT.md during refresh.",
-    ),
-    update_gitignore_file: bool = typer.Option(
-        True,
-        "--update-gitignore/--no-update-gitignore",
-        help="Create or update .gitignore with generated context paths.",
-    ),
+    upstream: Annotated[
+        str | None,
+        typer.Option(
+            "--upstream",
+            "-u",
+            help=(
+                "Upstream GitHub repository. Used only if metadata.json is missing "
+                "or to override it."
+            ),
+        ),
+    ] = None,
+    fork: Annotated[
+        str | None,
+        typer.Option(
+            "--fork",
+            "-f",
+            help="Fork GitHub repository. Used only if metadata.json is missing or to override it.",
+        ),
+    ] = None,
+    issue_limit: Annotated[
+        int, typer.Option("--issue-limit", help="Maximum number of issues to fetch.")
+    ] = 300,
+    pr_limit: Annotated[
+        int, typer.Option("--pr-limit", help="Maximum number of pull requests to fetch.")
+    ] = 300,
+    overwrite_agent: Annotated[
+        bool,
+        typer.Option("--overwrite-agent", help="Overwrite AGENT.md during refresh."),
+    ] = False,
+    update_gitignore_file: Annotated[
+        bool,
+        typer.Option(
+            "--update-gitignore/--no-update-gitignore",
+            help="Create or update .gitignore with generated context paths.",
+        ),
+    ] = True,
+    base_branch: Annotated[
+        str | None,
+        typer.Option(
+            "--base-branch",
+            help="Override the branch-ahead base branch from metadata or auto-detection.",
+        ),
+    ] = None,
 ) -> None:
     metadata_path = out / "metadata.json"
 
@@ -429,6 +455,7 @@ def refresh(
             agent_file=Path(metadata.get("agent_file", "AGENT.md")),
             issue_limit=int(metadata.get("issue_limit", issue_limit)),
             pr_limit=int(metadata.get("pr_limit", pr_limit)),
+            base_branch=base_branch or metadata.get("base_branch"),
             include_closed=bool(metadata.get("include_closed", False)),
             overwrite_agent=overwrite_agent,
             update_gitignore=update_gitignore_file,
@@ -452,6 +479,7 @@ def refresh(
             agent_file=Path("AGENT.md"),
             issue_limit=300,
             pr_limit=300,
+            base_branch=base_branch,
             include_closed=False,
             overwrite_agent=overwrite_agent,
             update_gitignore=update_gitignore_file,

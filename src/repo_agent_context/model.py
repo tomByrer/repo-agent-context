@@ -12,6 +12,7 @@ class ContextConfig:
     agent_file: Path
     issue_limit: int
     pr_limit: int
+    base_branch: str | None
     include_closed: bool
     overwrite_agent: bool
     update_gitignore: bool

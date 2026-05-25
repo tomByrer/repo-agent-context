@@ -138,6 +138,41 @@ def test_remote_branch_refs_returns_empty_when_git_fails(monkeypatch: pytest.Mon
     assert git.remote_branch_refs("upstream") == []
 
 
+def test_default_branch_for_remote_uses_symbolic_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        git,
+        "try_run_git",
+        lambda args: "refs/remotes/upstream/main\n"
+        if args[:2] == ["symbolic-ref", "--quiet"]
+        else None,
+    )
+
+    assert git.default_branch_for_remote("upstream") == "main"
+
+
+def test_default_branch_for_remote_falls_back_to_existing_main_or_master(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_try_run_git(args: list[str]) -> str | None:
+        if args[:2] == ["symbolic-ref", "--quiet"]:
+            return None
+        if args[-1] == "refs/remotes/upstream/main":
+            return "ok"
+        return None
+
+    monkeypatch.setattr(git, "try_run_git", fake_try_run_git)
+
+    assert git.default_branch_for_remote("upstream") == "main"
+
+
+def test_default_branch_for_remote_uses_fallback_when_no_ref_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(git, "try_run_git", lambda args: None)
+
+    assert git.default_branch_for_remote("upstream", fallback="trunk") == "trunk"
+
+
 def test_commit_summary_from_log_line_accepts_separator_in_subject() -> None:
     commit = git.commit_summary_from_log_line("abc\x1fa1\x1f2026\x1fAlice\x1fsubject\x1fextra")
 
@@ -180,6 +215,8 @@ def test_branches_ahead_of_base_reports_no_matching_remote(
     data = git.branches_ahead_of_base("owner/repo")
 
     assert data["branches"] == []
+    assert data["baseBranch"] == "master"
+    assert data["baseBranchSource"] == "fallback"
     assert data["warning"] == "No local git remote matches the upstream repository."
 
 
@@ -192,6 +229,7 @@ def test_branches_ahead_of_base_reports_missing_base_ref(
     data = git.branches_ahead_of_base("owner/repo", "main")
 
     assert data["baseRef"] == "refs/remotes/upstream/main"
+    assert data["baseBranchSource"] == "explicit"
     assert "Base branch ref not found" in data["warning"]
 
 
@@ -200,11 +238,12 @@ def test_branches_ahead_of_base_collects_and_sorts_ahead_branches(
 ) -> None:
     monkeypatch.setattr(git, "remote_name_for_repo", lambda repo: "upstream")
     monkeypatch.setattr(git, "try_run_git", lambda args: "base-ok")
+    monkeypatch.setattr(git, "default_branch_for_remote", lambda remote: "main")
     monkeypatch.setattr(
         git,
         "remote_branch_refs",
         lambda remote: [
-            ("master", "refs/remotes/upstream/master", "000"),
+            ("main", "refs/remotes/upstream/main", "000"),
             ("small", "refs/remotes/upstream/small", "111"),
             ("stale", "refs/remotes/upstream/stale", "222"),
             ("large", "refs/remotes/upstream/large", "333"),
@@ -229,6 +268,8 @@ def test_branches_ahead_of_base_collects_and_sorts_ahead_branches(
 
     data = git.branches_ahead_of_base("owner/repo")
 
+    assert data["baseBranch"] == "main"
+    assert data["baseBranchSource"] == "detected"
     assert [branch["name"] for branch in data["branches"]] == ["large", "small"]
     assert data["branches"][0]["aheadBy"] == 3
     assert data["branches"][0]["behindBy"] == 2

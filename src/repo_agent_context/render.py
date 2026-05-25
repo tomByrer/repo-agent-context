@@ -240,18 +240,48 @@ def render_comments(comments: list[dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
+def render_metadata_lines(lines: list[tuple[str, Any]]) -> str:
+    return "\n".join(f"- {label}: {value}" for label, value in lines)
+
+
+def render_changed_files(files: list[dict[str, Any]]) -> str:
+    lines = []
+    for changed_file in files:
+        path = changed_file.get("path", "")
+        additions = changed_file.get("additions", 0)
+        deletions = changed_file.get("deletions", 0)
+        lines.append(f"- `{path}` (+{additions}/-{deletions})")
+
+    return "\n".join(lines) if lines else "_No files listed._"
+
+
+def render_commit_list(commits: list[dict[str, Any]]) -> str:
+    lines = []
+    for commit in commits:
+        message = commit.get("messageHeadline") or commit.get("message") or ""
+        oid = commit.get("oid", "")[:12]
+        lines.append(f"- `{oid}` {message}")
+
+    return "\n".join(lines) if lines else "_No commits listed._"
+
+
 def render_issue(issue: dict[str, Any]) -> str:
     body = issue.get("body") or ""
     comments = issue.get("comments") or []
+    metadata = render_metadata_lines(
+        [
+            ("State", issue.get("state")),
+            ("Author", author_login(issue)),
+            ("Labels", label_names(issue)),
+            ("Created", issue.get("createdAt")),
+            ("Updated", issue.get("updatedAt")),
+            ("URL", issue.get("url")),
+        ]
+    )
 
     return f"""# Issue #{issue["number"]}: {issue["title"]}
 
-- State: {issue.get("state")}
-- Author: {author_login(issue)}
-- Labels: {label_names(issue)}
-- Created: {issue.get("createdAt")}
-- Updated: {issue.get("updatedAt")}
-- URL: {issue.get("url")}
+{metadata}
 
 ## Body
 
@@ -269,33 +299,25 @@ def render_pr(pr: dict[str, Any]) -> str:
     comments = pr.get("comments") or []
     commits = pr.get("commits") or []
     status_check_rollup = pr.get("statusCheckRollup") or []
-
-    file_lines = []
-    for changed_file in files:
-        path = changed_file.get("path", "")
-        additions = changed_file.get("additions", 0)
-        deletions = changed_file.get("deletions", 0)
-        file_lines.append(f"- `{path}` (+{additions}/-{deletions})")
-
-    commit_lines = []
-    for commit in commits:
-        message = commit.get("messageHeadline") or commit.get("message") or ""
-        oid = commit.get("oid", "")[:12]
-        commit_lines.append(f"- `{oid}` {message}")
+    metadata = render_metadata_lines(
+        [
+            ("State", pr.get("state")),
+            ("Draft", pr.get("isDraft")),
+            ("Author", author_login(pr)),
+            ("Labels", label_names(pr)),
+            ("Base", pr.get("baseRefName")),
+            ("Head", pr.get("headRefName")),
+            ("Mergeable", pr.get("mergeable")),
+            ("Review decision", pr.get("reviewDecision")),
+            ("Created", pr.get("createdAt")),
+            ("Updated", pr.get("updatedAt")),
+            ("URL", pr.get("url")),
+        ]
+    )
 
     return f"""# Pull Request #{pr["number"]}: {pr["title"]}
 
-- State: {pr.get("state")}
-- Draft: {pr.get("isDraft")}
-- Author: {author_login(pr)}
-- Labels: {label_names(pr)}
-- Base: {pr.get("baseRefName")}
-- Head: {pr.get("headRefName")}
-- Mergeable: {pr.get("mergeable")}
-- Review decision: {pr.get("reviewDecision")}
-- Created: {pr.get("createdAt")}
-- Updated: {pr.get("updatedAt")}
-- URL: {pr.get("url")}
+{metadata}
 
 ## Body
 
@@ -303,11 +325,11 @@ def render_pr(pr: dict[str, Any]) -> str:
 
 ## Changed files
 
-{chr(10).join(file_lines) if file_lines else "_No files listed._"}
+{render_changed_files(files)}
 
 ## Commits
 
-{chr(10).join(commit_lines) if commit_lines else "_No commits listed._"}
+{render_commit_list(commits)}
 
 ## CI status
 
@@ -359,6 +381,7 @@ def render_branches_ahead(data: dict[str, Any]) -> str:
         f"- Repository: {data.get('repo')}",
         f"- Remote: {data.get('remote') or 'unknown'}",
         f"- Base branch: {base_branch}",
+        f"- Base branch source: {data.get('baseBranchSource') or 'unknown'}",
         "",
     ]
 

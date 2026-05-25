@@ -146,6 +146,25 @@ def remote_branch_refs(remote_name: str) -> list[tuple[str, str, str]]:
     return refs
 
 
+def default_branch_for_remote(remote_name: str, fallback: str = "master") -> str:
+    output = try_run_git(["symbolic-ref", "--quiet", f"refs/remotes/{remote_name}/HEAD"])
+    prefix = f"refs/remotes/{remote_name}/"
+
+    if output:
+        ref = output.strip()
+        if ref.startswith(prefix):
+            branch_name = ref.removeprefix(prefix)
+            if branch_name and branch_name != "HEAD":
+                return branch_name
+
+    for candidate in ("main", "master"):
+        ref_name = f"refs/remotes/{remote_name}/{candidate}"
+        if try_run_git(["rev-parse", "--verify", "--quiet", ref_name]):
+            return candidate
+
+    return fallback
+
+
 def commit_summary_from_log_line(line: str) -> dict[str, Any] | None:
     parts = line.split("\x1f", 4)
     if len(parts) != 5:
@@ -179,24 +198,29 @@ def commits_ahead_of_base(ref_name: str, base_ref: str) -> list[dict[str, Any]]:
     return commits
 
 
-def branches_ahead_of_base(repo: str, base_branch: str = "master") -> dict[str, Any]:
+def branches_ahead_of_base(repo: str, base_branch: str | None = None) -> dict[str, Any]:
     remote_name = remote_name_for_repo(repo)
+    requested_base_branch = base_branch
     if remote_name is None:
         return {
             "repo": repo,
             "remote": None,
-            "baseBranch": base_branch,
+            "baseBranch": base_branch or "master",
+            "baseBranchSource": "fallback",
             "baseRef": None,
             "branches": [],
             "warning": "No local git remote matches the upstream repository.",
         }
 
+    base_branch = base_branch or default_branch_for_remote(remote_name)
+    base_branch_source = "explicit" if requested_base_branch else "detected"
     base_ref = f"refs/remotes/{remote_name}/{base_branch}"
     if try_run_git(["rev-parse", "--verify", "--quiet", base_ref]) is None:
         return {
             "repo": repo,
             "remote": remote_name,
             "baseBranch": base_branch,
+            "baseBranchSource": base_branch_source,
             "baseRef": base_ref,
             "branches": [],
             "warning": f"Base branch ref not found locally: {base_ref}",
@@ -230,6 +254,7 @@ def branches_ahead_of_base(repo: str, base_branch: str = "master") -> dict[str, 
         "repo": repo,
         "remote": remote_name,
         "baseBranch": base_branch,
+        "baseBranchSource": base_branch_source,
         "baseRef": base_ref,
         "branches": branches,
     }
