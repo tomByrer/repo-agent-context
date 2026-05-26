@@ -61,6 +61,8 @@ def run_glab(args: list[str]) -> str:
 
         raise error
 
+    raise GitLabCliError(f"GitLab CLI command failed unexpectedly: {' '.join(command)}")
+
 
 def glab_json(args: list[str]) -> Any:
     output = run_glab(args)
