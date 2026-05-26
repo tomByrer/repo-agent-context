@@ -11,6 +11,7 @@
 
 Main advantages:
 
+- Gives better overview for your agent, so it should burn less tokens for knowing more about you repo.
 - Works locally, so it is useful offline or on unreliable connections.
 - Keeps issue, PR / merge request, CI, diff, and branch context close to the repository clone.
 - Stays readable and inspectable by both humans and agents.
