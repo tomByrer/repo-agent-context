@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "repo-agent-context"
-version = "0.2.0"
+version = "0.2.2"
 description = "Build local issue and pull request context for coding agents on GitHub and GitLab."
 readme = "README.md"
 license = "MIT"

@@ -5,6 +5,40 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://github.com/arnowaschk/repo-agent-context)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
+## Short Summary
+
+`repo-agent-context` builds a local snapshot of repository state from GitHub or GitLab and writes it to plain Markdown and JSON files inside the clone. It is meant for coding agents and local LLMs that need project context without repeatedly querying the hosting service.
+
+Main advantages:
+
+- Gives better overview for your agent, so it should burn less tokens for knowing more about you repo.
+- Works locally, so it is useful offline or on unreliable connections.
+- Keeps issue, PR / merge request, CI, diff, and branch context close to the repository clone.
+- Stays readable and inspectable by both humans and agents.
+- Avoids a hosted service, vector database, background daemon, or framework dependency.
+
+Quick start:
+
+```bash
+gh auth login # or glab for gitlab
+git fetch upstream
+repo-agent-context build
+```
+
+For GitLab, use `glab auth login` and `repo-agent-context build --provider gitlab` though provider detection should be enough usually.
+
+What you can do with it:
+
+- Ask which issues are good first contributions.
+- Review what a PR / merge request changes, including CI and comments.
+- Find stale or nearly mergeable work.
+- Work from the generated files even when offline.
+
+Support: if this tool saves you maintainer time, optional support via Buy Me a Coffee is appreciated but not expected:
+https://buymeacoffee.com/arnwas
+
+## Long and Exhaustive Version
+
 Local GitHub and GitLab issue and PR / merge request context snapshots for coding agents and local LLMs.
 
 `repo-agent-context` builds a local, file-based context snapshot from a GitHub or GitLab repository's issues and pull requests / merge requests so that coding agents can answer questions about project state, open work, stale merge requests, likely fixes, and good first contributions without repeatedly browsing the hosting service.

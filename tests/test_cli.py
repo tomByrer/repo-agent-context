@@ -491,8 +491,33 @@ def test_refresh_uses_existing_metadata(
     assert seen[0].agent_file == tmp_path / "CUSTOM.md"
     assert seen[0].issue_limit == 7
     assert seen[0].base_branch == "main"
+    assert seen[0].include_closed is True
     assert seen[0].overwrite_agent is True
     assert seen[0].update_gitignore is False
+
+
+def test_refresh_include_closed_flag_overrides_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out = tmp_path / "agent_context"
+    out.mkdir()
+    (out / "metadata.json").write_text(
+        json.dumps(
+            {
+                "upstream": "owner/repo",
+                "fork": None,
+                "include_closed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    seen: list[ContextConfig] = []
+    monkeypatch.setattr(cli, "run_build", lambda cfg: seen.append(cfg))
+
+    cli.refresh(out=out, include_closed=True)
+
+    assert seen[0].include_closed is True
 
 
 def test_refresh_base_branch_option_overrides_metadata(
@@ -542,6 +567,7 @@ def test_refresh_falls_back_to_detection_without_metadata(
     assert seen[0].out_dir == tmp_path / "missing"
     assert seen[0].agent_file == Path("AGENT.md")
     assert seen[0].base_branch is None
+    assert seen[0].include_closed is False
     assert seen[0].provider == "github"
 
 
