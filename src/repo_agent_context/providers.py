@@ -239,17 +239,44 @@ def _normalize_pr(
 def _gitlab_api_json(endpoint: str, *, paginate: bool = False) -> Any:
     args = ["api", endpoint, "--hostname", "gitlab.com"]
     if paginate:
-        args.extend(["--paginate", "--output", "ndjson"])
-        output = run_glab(args)
-        items: list[Any] = []
-        for line in output.splitlines():
-            line = line.strip()
-            if line:
-                items.append(json.loads(line))
-        return items
+        args.extend(["--paginate", "--output", "json"])
+        return _parse_gitlab_json_output(run_glab(args))
 
     args.extend(["--output", "json"])
     return glab_json(args)
+
+
+def _parse_gitlab_json_output(output: str) -> Any:
+    text = output.strip()
+    if not text:
+        return []
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        values: list[Any] = []
+        idx = 0
+        length = len(text)
+
+        while idx < length:
+            while idx < length and text[idx].isspace():
+                idx += 1
+
+            value, next_idx = decoder.raw_decode(text, idx)
+            values.append(value)
+            idx = next_idx
+
+        if len(values) == 1:
+            return values[0]
+
+        flattened: list[Any] = []
+        for value in values:
+            if isinstance(value, list):
+                flattened.extend(value)
+            else:
+                flattened.append(value)
+        return flattened
 
 
 def _gitlab_project_path(repo: str) -> str:

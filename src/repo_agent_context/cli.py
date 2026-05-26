@@ -434,6 +434,10 @@ def refresh(
     pr_limit: Annotated[
         int, typer.Option("--pr-limit", help="Maximum number of pull requests to fetch.")
     ] = 300,
+    include_closed: Annotated[
+        bool,
+        typer.Option("--include-closed", help="Fetch closed issues and PRs as well."),
+    ] = False,
     overwrite_agent: Annotated[
         bool,
         typer.Option("--overwrite-agent", help="Overwrite AGENT.md during refresh."),
@@ -468,7 +472,7 @@ def refresh(
             issue_limit=int(metadata.get("issue_limit", issue_limit)),
             pr_limit=int(metadata.get("pr_limit", pr_limit)),
             base_branch=base_branch or metadata.get("base_branch"),
-            include_closed=bool(metadata.get("include_closed", False)),
+            include_closed=include_closed or bool(metadata.get("include_closed", False)),
             overwrite_agent=overwrite_agent,
             update_gitignore=update_gitignore_file,
         )
@@ -493,7 +497,7 @@ def refresh(
             issue_limit=300,
             pr_limit=300,
             base_branch=base_branch,
-            include_closed=False,
+            include_closed=include_closed,
             overwrite_agent=overwrite_agent,
             update_gitignore=update_gitignore_file,
         )

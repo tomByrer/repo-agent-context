@@ -38,6 +38,37 @@ def test_run_glab_raises_detailed_error(monkeypatch: pytest.MonkeyPatch) -> None
     assert "auth failed" in message
 
 
+def test_run_glab_retries_transient_network_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts: list[int] = []
+    results = iter(
+        [
+            completed(stderr="read: connection reset by peer\n", returncode=1),
+            completed("ok"),
+        ]
+    )
+    monkeypatch.setattr(gitlab.subprocess, "run", lambda *args, **kwargs: attempts.append(1) or next(results))
+    monkeypatch.setattr(gitlab.time, "sleep", lambda seconds: None)
+
+    assert gitlab.run_glab(["api", "projects/example"]) == "ok"
+    assert len(attempts) == 2
+
+
+def test_run_glab_does_not_retry_permanent_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts: list[int] = []
+
+    def fake_run(*args, **kwargs):
+        attempts.append(1)
+        return completed(stderr="auth failed\n", returncode=1)
+
+    monkeypatch.setattr(gitlab.subprocess, "run", fake_run)
+    monkeypatch.setattr(gitlab.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(GitLabCliError):
+        gitlab.run_glab(["repo", "view"])
+
+    assert len(attempts) == 1
+
+
 def test_glab_json_parses_output(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gitlab, "run_glab", lambda args: '{"name":"repo"}')
 

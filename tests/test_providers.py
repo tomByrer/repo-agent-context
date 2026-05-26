@@ -221,12 +221,46 @@ def test_provider_helper_functions_cover_all_normalization_paths() -> None:
     assert providers._gitlab_project_path("owner/repo") == "owner%2Frepo"
 
 
-def test_gitlab_api_json_handles_paginated_ndjson(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gitlab_api_json_handles_paginated_json_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
-    monkeypatch.setattr(providers, "run_glab", lambda args: calls.append(args) or '{"a":1}\n{"b":2}\n')
+    monkeypatch.setattr(
+        providers,
+        "run_glab",
+        lambda args: calls.append(args)
+        or '[\n  {"a":1}\n]\n[\n  {"b":2}\n]\n',
+    )
 
     assert providers._gitlab_api_json("projects/example", paginate=True) == [{"a": 1}, {"b": 2}]
-    assert calls == [["api", "projects/example", "--hostname", "gitlab.com", "--paginate", "--output", "ndjson"]]
+    assert calls == [["api", "projects/example", "--hostname", "gitlab.com", "--paginate", "--output", "json"]]
+
+
+def test_parse_gitlab_json_output_handles_blank_and_single_values() -> None:
+    assert providers._parse_gitlab_json_output("   ") == []
+    assert providers._parse_gitlab_json_output('{"ok": true}') == {"ok": True}
+
+
+def test_parse_gitlab_json_output_falls_back_to_stream_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        providers.json,
+        "loads",
+        lambda text: (_ for _ in ()).throw(providers.json.JSONDecodeError("boom", text, 0)),
+    )
+
+    assert providers._parse_gitlab_json_output('[{"a":1}]\n{"b":2}\n   ') == [{"a": 1}, {"b": 2}]
+
+
+def test_parse_gitlab_json_output_returns_single_stream_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        providers.json,
+        "loads",
+        lambda text: (_ for _ in ()).throw(providers.json.JSONDecodeError("boom", text, 0)),
+    )
+
+    assert providers._parse_gitlab_json_output('{"a":1}\n   ') == {"a": 1}
 
 
 def test_gitlab_api_json_uses_json_wrapper_for_non_paginated_requests(monkeypatch: pytest.MonkeyPatch) -> None:
