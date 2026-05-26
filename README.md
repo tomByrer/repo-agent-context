@@ -3,6 +3,9 @@
 [![CI](https://github.com/arnowaschk/repo-agent-context/actions/workflows/ci.yml/badge.svg)](https://github.com/arnowaschk/repo-agent-context/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://github.com/arnowaschk/repo-agent-context)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://github.com/arnowaschk/repo-agent-context)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://github.com/arnowaschk/repo-agent-context)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://github.com/arnowaschk/repo-agent-context)
+[![Python 3.14+](https://img.shields.io/badge/python-3.14%2B-blue.svg)](https://github.com/arnowaschk/repo-agent-context)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ## Short Summary
